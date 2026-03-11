@@ -1,0 +1,12 @@
+[static_config]
+my_id = "pub_node"
+host = "127.0.0.1"
+port = 5555
+is_master = true
+
+[static_config.publishers]
+control = "self"
+
+[dynamic]
+message_prefix = "hex"
+interval_ms = 500
