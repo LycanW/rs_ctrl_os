@@ -85,14 +85,14 @@ where
     }
 
     fn reload_dynamic(path: &Path, data_lock: &Arc<RwLock<D>>) {
-        info!("🔄 Reloading dynamic config...");
+        // info!("🔄 Reloading dynamic config...");
         if let Ok(content) = fs::read_to_string(path) {
             if let Ok(val) = toml::from_str::<toml::Value>(&content) {
                 if let Some(dyn_val) = val.get("dynamic") {
                     if let Ok(new_data) = dyn_val.clone().try_into::<D>() {
                         if let Ok(mut guard) = data_lock.write() {
                             *guard = new_data;
-                            info!("✨ Dynamic config updated.");
+                            // info!("✨ Dynamic config updated.");
                             return;
                         } else {
                             warn!("⚠️ Dynamic config lock poisoned, skip update.");
