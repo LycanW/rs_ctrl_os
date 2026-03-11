@@ -2,6 +2,14 @@
 name = "rs_ctrl_os"
 version = "0.1.0"
 edition = "2024"
+authors = ["Han Wang <wanghan0410@126.com>"]
+description = "A small runtime library for node discovery, ZeroMQ pub/sub messaging, dynamic TOML config reloading, and simple time synchronization in distributed Rust systems."
+license = "MIT"
+repository = "https://github.com/LycanW/rs_ctrl_os"
+homepage = "https://github.com/LycanW/rs_ctrl_os/"
+readme = "README.md"
+keywords = ["distributed", "zmq", "pubsub", "config", "time-sync"]
+categories = ["network-programming", "config", "concurrency"]
 
 [dependencies]
 bincode = "1.3.3"
