@@ -1,0 +1,12 @@
+[static_config]
+my_id = "multi_sub"
+host = "127.0.0.1"
+port = 5561
+is_master = false
+
+[static_config.subscribers]
+multi_sub = "multi_pub"
+
+[dynamic]
+poll_interval_ms = 200
+

@@ -43,7 +43,7 @@ fn main() -> Result<()> {
     )?;
 
     // Publisher only: one PUB socket for topic "control"
-    let mut bus = PubSubManager::new(&static_cfg, registry)?;
+    let bus = PubSubManager::new(&static_cfg, registry)?;
 
     loop {
         let dyn_cfg = manager.get_dynamic_clone();

@@ -1,0 +1,15 @@
+[static_config]
+my_id = "multi_pub"
+host = "127.0.0.1"
+port = 5560
+is_master = true
+
+[static_config.publishers]
+control = "self"
+
+[dynamic]
+control_sub_topic = "ctrl"
+status_sub_topic = "status"
+alerts_sub_topic = "alerts"
+interval_ms = 500
+
