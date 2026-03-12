@@ -402,7 +402,7 @@ dependencies = [
 
 [[package]]
 name = "rs_ctrl_os"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bincode",
  "notify",

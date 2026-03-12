@@ -1,7 +1,7 @@
 [package]
 name = "rs_ctrl_os"
-version = "0.1.0"
-edition = "2024"
+version = "0.2.0"
+edition = "2021"
 authors = ["Han Wang <wanghan0410@126.com>"]
 description = "A small runtime library for node discovery, ZeroMQ pub/sub messaging, dynamic TOML config reloading, and simple time synchronization in distributed Rust systems."
 license = "MIT"
