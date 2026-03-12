@@ -157,6 +157,44 @@ impl PubSubManager {
         Ok(())
     }
 
+    /// 发布原始字节（不经过 serde/bincode，直接透传）。
+    /// 适用于图像、点云等已编码的二进制数据（JPEG、压缩点云等）。
+    /// 频率控制与 `publish_topic` 共享。
+    pub fn publish_raw(&mut self, topic_key: &str, sub_topic: &str, payload: &[u8]) -> Result<()> {
+        if self.publish_hz < 0 {
+            return Ok(());
+        }
+        if self.publish_hz > 0 {
+            let now = Instant::now();
+            let min_interval = Duration::from_secs_f64(1.0 / self.publish_hz as f64);
+            if let Some(last) = self.last_publish.get(topic_key) {
+                if now.duration_since(*last) < min_interval {
+                    return Ok(());
+                }
+            }
+            self.last_publish.insert(topic_key.to_string(), now);
+        }
+
+        let socket = if self.shared_pub_topics.contains(topic_key) {
+            self.shared_pub
+                .as_ref()
+                .ok_or_else(|| RsCtrlError::Comms(format!("Pub key '{}' not initialized", topic_key)))?
+        } else {
+            self.pubs
+                .get(topic_key)
+                .ok_or_else(|| RsCtrlError::Comms(format!("Pub key '{}' not found", topic_key)))?
+        };
+
+        let id_bytes = self.my_id.as_bytes();
+        let topic_bytes = sub_topic.as_bytes();
+
+        match socket.send_multipart(&[id_bytes, topic_bytes, payload], zmq::DONTWAIT) {
+            Ok(_) => Ok(()),
+            Err(e) if e == zmq::Error::EAGAIN => Ok(()),
+            Err(e) => Err(RsCtrlError::Zmq(e)),
+        }
+    }
+
     /// 发布特定子话题 (Bincode 序列化)
     pub fn publish_topic<T: serde::Serialize>(&mut self, topic_key: &str, sub_topic: &str, data: &T) -> Result<()> {
         // 1) 频率控制：如设置了 publish_hz，则按最小间隔丢弃过快的发送请求

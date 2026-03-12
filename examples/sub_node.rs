@@ -1,4 +1,3 @@
-use std::path::Path;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -7,7 +6,7 @@ use serde::Deserialize;
 use bincode;
 
 use rs_ctrl_os::{
-    config::ConfigManager,
+    load_config_typed,
     init_logging,
     start_discovery,
     PubSubManager,
@@ -15,26 +14,9 @@ use rs_ctrl_os::{
     Result,
 };
 
-/// Dynamic section of the TOML config used for the subscriber node.
-///
-/// ```toml
-/// [static_config]
-/// my_id = "sub_node"
-/// host = "127.0.0.1"
-/// port = 5556
-/// is_master = false
-///
-/// [static_config.subscribers]
-/// local_sub = "pub_node"
-///
-/// [dynamic]
-/// # 订阅频率 Hz；>0 固定频率，0 表示不订阅（示例中要求 >0）
-/// subscribe_hz = 1000
-/// ```
+/// 本示例不需要热重载，使用 load_config_typed 一次性加载。
 #[derive(Clone, Deserialize)]
-struct DynamicCfg {
-    // 本示例不再从 dynamic 控制频率，仅保留占位以兼容 ConfigManager 泛型。
-}
+struct DynamicCfg {}
 
 fn fmt_hex(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 3);
@@ -55,8 +37,7 @@ fn main() -> Result<()> {
         .nth(1)
         .unwrap_or_else(|| "sub_config.toml".to_string());
 
-    let manager: ConfigManager<DynamicCfg> = ConfigManager::new(Path::new(&config_path))?;
-    let static_cfg = manager.static_cfg().clone();
+    let (static_cfg, _dynamic) = load_config_typed::<DynamicCfg>(&config_path)?;
 
     let time_sync = Arc::new(TimeSynchronizer::new());
 
@@ -75,8 +56,6 @@ fn main() -> Result<()> {
     bus.set_subscribe_hz(static_cfg.subscribe_hz);
 
     loop {
-        let _dyn_cfg = manager.get_dynamic_clone();
-
         // Drive discovery connections
         bus.tick()?;
 

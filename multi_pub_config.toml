@@ -5,6 +5,7 @@ port = 5560
 is_master = true
 publish_hz = 1000
 subscribe_hz = 1000
+dynamic_load_enable = true
 
 [static_config.publishers]
 control = "self"

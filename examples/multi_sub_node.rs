@@ -1,4 +1,3 @@
-use std::path::Path;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -6,7 +5,7 @@ use std::time::Duration;
 use serde::Deserialize;
 
 use rs_ctrl_os::{
-    config::ConfigManager,
+    load_config_typed,
     init_logging,
     start_discovery,
     PubSubManager,
@@ -14,27 +13,9 @@ use rs_ctrl_os::{
     Result,
 };
 
-/// Dynamic section of the TOML config used for the multi-sub node.
-///
-/// ```toml
-/// [static_config]
-/// my_id = "multi_sub"
-/// host = "127.0.0.1"
-/// port = 5561
-/// is_master = false
-///
-/// [static_config.subscribers]
-/// from_multi_pub = "multi_pub"
-/// from_pub       = "pub_node"
-///
-/// [dynamic]
-/// # 订阅频率 Hz；>0 固定频率，0 表示不订阅（示例中要求 >0）
-/// subscribe_hz = 500
-/// ```
+/// 本示例不需要热重载，使用 load_config_typed 一次性加载。
 #[derive(Clone, Deserialize)]
-struct DynamicCfg {
-    // 本示例不再从 dynamic 控制频率，仅保留占位以兼容 ConfigManager 泛型。
-}
+struct DynamicCfg {}
 
 fn main() -> Result<()> {
     init_logging();
@@ -43,8 +24,7 @@ fn main() -> Result<()> {
         .nth(1)
         .unwrap_or_else(|| "multi_sub_config.toml".to_string());
 
-    let manager: ConfigManager<DynamicCfg> = ConfigManager::new(Path::new(&config_path))?;
-    let static_cfg = manager.static_cfg().clone();
+    let (static_cfg, _dynamic) = load_config_typed::<DynamicCfg>(&config_path)?;
 
     let time_sync = Arc::new(TimeSynchronizer::new());
 
@@ -68,8 +48,6 @@ fn main() -> Result<()> {
     bus.set_sub_topics("from_pub", &["demo"])?;
 
     loop {
-        let _dyn_cfg = manager.get_dynamic_clone();
-
         // Drive pending_subs to actually connect once discovered.
         bus.tick()?;
 

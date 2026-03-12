@@ -4,11 +4,52 @@
 
 - **节点发现**：基于 UDP 多播的心跳机制（`Heartbeat` + `ServiceRegistry`）
 - **消息通信**：基于 ZeroMQ 的 pub/sub 抽象（`PubSubManager`）
-- **配置管理**：TOML 配置加载 + 动态热更新（`ConfigManager`）
+- **配置管理**：TOML 配置加载 + 动态热更新（`ConfigManager` / `load_config_typed`）
 - **时间同步**：简单的主从时钟同步（`TimeSynchronizer`）
 - **统一错误/日志**：`RsCtrlError` + `tracing` 日志初始化
 
 适合需要在局域网内跑多进程/多节点，进行“互相发现 + 消息分发 + 动态配置”的系统。
+
+---
+
+## 框架能力与边界
+
+### 框架负责什么
+
+| 能力 | 说明 |
+|------|------|
+| **StaticBase 与 [static_config]** | 节点 ID、host、port、是否 master、publishers/subscribers 拓扑、publish_hz/subscribe_hz、dynamic_load_enable 等**运行所需的基础配置** |
+| **配置加载机制** | 从 TOML 解析 `[static_config]`，提供 `load_config_rcos`、`load_config_typed`、`ConfigManager` 等 API |
+| **dynamic 热更新** | 当 `dynamic_load_enable=true` 时，监听配置文件变化并热重载 `[dynamic]` 内容 |
+| **消息通道** | ZMQ pub/sub、发现、时间同步、频率限速、原始字节透传（`publish_raw` / `try_recv_raw`） |
+
+### 框架不负责什么
+
+| 边界 | 说明 |
+|------|------|
+| **[dynamic] 的结构与语义** | 框架只负责「加载并热更新」`[dynamic]`，**不定义**其字段。每个应用自行定义 `D: Deserialize`，例如 CAN 接口列表、电机参数、相机参数等 |
+| **业务数据内容** | 图像、点云等大体量数据应通过 topic 传输，**不应**塞进 TOML。配置中只放「如何连接、参数、schema 版本」等元信息 |
+| **业务协议与编码** | 消息 payload 的序列化方式（bincode / raw / JPEG 等）由应用选择；框架提供 `publish_topic`（bincode）、`publish_raw`（透传）两种能力 |
+
+### 如何区分框架配置与业务配置
+
+- **`[static_config]`**：框架强依赖，**必须存在**。包含 `my_id`、`host`、`port`、`publish_hz`、`subscribe_hz`、`dynamic_load_enable`、`publishers`、`subscribers` 等。
+- **`[dynamic]`**：业务自由定义。框架不解析其具体字段，只负责按你提供的 `D` 反序列化并（可选）热更新。  
+  例如：can_bridge 定义 `interfaces`、`devices`；相机节点定义 `camera_id`、`resolution`；点云节点定义 `voxel_size` 等。
+
+### 框架在背后完成的工作
+
+以下能力由框架自动完成，应用通常无需关心实现细节：
+
+| 模块 | 后台行为 |
+|------|----------|
+| **节点发现** | 启动两个线程：发送端每 1 秒向 `224.0.0.100:9999` 广播本节点 `Heartbeat`；接收端持续收取其它节点心跳，更新 `ServiceRegistry`，超过 10 秒未收到则从注册表剔除。 |
+| **时间同步** | 接收端收到 `is_master=true` 的心跳时，提取其 `clock_time_ms`，计算本地与 master 的时钟偏移并低通滤波。`now_corrected_ms()` 内部使用该偏移修正当前时间。 |
+| **ConfigManager 热更新** | 当 `dynamic_load_enable=true` 时，通过 `notify` 监听配置文件。文件变化时自动重读并解析 `[dynamic]`，更新内部 `RwLock`，`get_dynamic_clone()` 返回最新值。 |
+| **发布频率控制** | 当 `publish_hz > 0` 时，`publish_topic` / `publish_raw` 内部按 `topic_key` 记录上次发送时间，超过最小间隔的请求会被静默丢弃（限频）。 |
+| **订阅频率控制** | 当 `subscribe_hz > 0` 时，`try_recv_raw` / `try_recv_specific` 内部按 `local_name` 记录上次轮询时间，未到间隔则直接返回 `None`，避免过度轮询。 |
+| **订阅连接建立** | 初始化时，若目标节点尚未发现，订阅会进入 `pending_subs`。应用需在主循环中调用 `bus.tick()`，框架检查 `ServiceRegistry`，一旦目标上线则自动建立 SUB 连接。 |
+| **子话题过滤** | 若通过 `set_sub_topics` 设置了白名单，框架在 `try_recv_raw` 中只返回白名单内的 `sub_topic`，其它消息静默丢弃。 |
 
 ---
 
@@ -45,6 +86,9 @@ my_id = "node1"
 host = "127.0.0.1"
 port = 5555
 is_master = true
+publish_hz = 1000
+subscribe_hz = 1000
+dynamic_load_enable = true
 
 [static_config.subscribers]
 local_sub = "node1"
@@ -127,23 +171,23 @@ interval_ms = 1000
 
 ## 功能概览
 
-- **配置管理（ConfigManager）**
-  - 从一个包含 `[static_config]` 和 `[dynamic]` 的 TOML 文件加载配置。
-  - 静态配置：`StaticBase`（节点 ID、host、port、是否 master、订阅/发布拓扑）。
-  - 动态配置：任意 `D: Deserialize + Clone`，通过文件监听自动热更新。
+- **配置管理**
+  - **`load_config_rcos(path)`**：返回 `(StaticBase, toml::Value)`，框架解析 `[static_config]`，`[dynamic]` 以原始 `toml::Value` 返回，由应用自行反序列化。
+  - **`load_config_typed::<D>(path)`**：返回 `(StaticBase, D)`，一次性加载，无热更新，适合无需动态重载的场景。
+  - **`ConfigManager<D>`**：加载 `[static_config]` + `[dynamic]`，当 `StaticBase.dynamic_load_enable=true`（默认）时监听文件变化并热重载 `[dynamic]`。
+  - **`StaticBase`**：节点 ID、host、port、is_master、publishers/subscribers、publish_hz、subscribe_hz、dynamic_load_enable 等框架必需字段。
 - **节点发现（start_discovery + ServiceRegistry）**
   - 使用 UDP 多播地址 `224.0.0.100:9999` 定期发送/接收 `Heartbeat`。
   - 自动维护一个节点注册表 `ServiceRegistry`，可以通过 `get_address(node_id)` 获取对方地址。
 - **ZeroMQ Pub/Sub（PubSubManager）**
-  - 按 `StaticBase.publishers` 在本地绑定 PUB socket。
-  - 按 `StaticBase.subscribers` 动态连接到其他节点的 PUB。
-  - 消息格式为 **三帧 multipart**：
-    1. 节点 ID（`my_id`，UTF‑8 字节）
-    2. 子话题（`sub_topic`，UTF‑8 字节）
-    3. 业务 payload（`bincode` 序列化的任意 `T: Serialize`）
+  - 按 `StaticBase.publishers` 在本地绑定 PUB socket，按 `StaticBase.subscribers` 动态连接其他节点。
+  - **`publish_topic`**：bincode 序列化，适合结构化小消息（控制指令、状态等）。
+  - **`publish_raw`**：透传原始字节，适合图像、点云等已编码二进制，不经过 serde。
+  - **`try_recv_raw`**：返回 `(sub_topic, Vec<u8>)`，由应用自行解析。
+  - **`try_recv_specific`**：将 payload 反序列化为指定类型（bincode）。
+  - 消息格式为 **三帧 multipart**：`[节点 ID, sub_topic, payload]`。
 - **时间同步（TimeSynchronizer）**
-  - 通过 master 心跳中的 `clock_time_ms` 与本地时间对比，估算偏移。
-  - 提供 `now_corrected_ms()` 作为“粗略对齐后的集群时间”。
+  - 通过 master 心跳中的 `clock_time_ms` 与本地时间对比，估算偏移，提供 `now_corrected_ms()`。
 
 ---
 
@@ -189,6 +233,9 @@ my_id = "node1"
 host = "127.0.0.1"
 port = 5555
 is_master = true
+publish_hz = 1000
+subscribe_hz = 1000
+dynamic_load_enable = true
 
 [static_config.subscribers]
 local_sub = "node1"
@@ -200,6 +247,8 @@ control = "self"
 message_prefix = "hello"
 ```
 
+**方式一：需要热重载时，用 ConfigManager**
+
 ```rust
 use std::path::Path;
 use serde::Deserialize;
@@ -208,18 +257,37 @@ use rs_ctrl_os::ConfigManager;
 #[derive(Clone, Deserialize)]
 struct DynamicCfg {
     message_prefix: String,
-    publish_hz: u64,
-    subscribe_hz: u64,
+    interval_ms: u64,
 }
 
 fn main() -> rs_ctrl_os::Result<()> {
-    init_logging();
+    rs_ctrl_os::init_logging();
 
     let manager: ConfigManager<DynamicCfg> =
         ConfigManager::new(Path::new("example_config.toml"))?;
     let static_cfg = manager.static_cfg().clone();
 
-    // 后面可以随时通过 manager.get_dynamic_clone() 获取最新动态配置
+    // 通过 manager.get_dynamic_clone() 获取最新 dynamic（文件变化时自动更新）
+    Ok(())
+}
+```
+
+**方式二：不需要热重载时，用 load_config_typed**
+
+```rust
+use serde::Deserialize;
+use rs_ctrl_os::load_config_typed;
+
+#[derive(Clone, Deserialize)]
+struct DynamicCfg {
+    message_prefix: String,
+}
+
+fn main() -> rs_ctrl_os::Result<()> {
+    rs_ctrl_os::init_logging();
+
+    let (static_cfg, dynamic) = load_config_typed::<DynamicCfg>("example_config.toml")?;
+    // 一次性加载，无 watcher 开销
     Ok(())
 }
 ```
@@ -271,8 +339,11 @@ fn main() -> rs_ctrl_os::Result<()> {
             dyn_cfg.message_prefix, static_cfg.my_id, ts_ms
         );
 
-        // topic_key = "control"，sub_topic = "demo"
+        // topic_key = "control"，sub_topic = "demo"（bincode 序列化）
         bus.publish_topic("control", "demo", &payload)?;
+
+        // 图像/点云等二进制可用 publish_raw 透传，无需 bincode
+        // bus.publish_raw("camera", "frame", &jpeg_bytes)?;
 
         if let Some(received) = bus.try_recv_specific::<String>("local_sub", "demo")? {
             println!("Received: {received}");
@@ -293,14 +364,8 @@ fn main() -> rs_ctrl_os::Result<()> {
 
 ## 示例（examples）
 
-仓库中包含几个可运行的示例，建议阅读并直接运行：
-
-- `examples/pub_node.rs` / `examples/sub_node.rs`  
-  单 pub + 单 sub，带动态 TOML 和时间戳。
-- `examples/multi_pub_node.rs` / `examples/multi_sub_node.rs`  
-  单进程 multi_pub（多个子话题）+ 单进程 multi_sub（多流订阅），演示如何在一个 socket 上区分多种业务流。
-- `examples/raw_sub_node.rs`  
-  展示如何用 `try_recv_raw` 收到 **原始二进制 payload**，并打印十六进制 + 反序列化后的字符串。
+- `examples/pub_node.rs` / `examples/sub_node.rs`：单 pub + 单 sub，pub 使用 `ConfigManager` 热重载，sub 使用 `load_config_typed` 一次性加载。
+- `examples/multi_pub_node.rs` / `examples/multi_sub_node.rs`：多子话题 pub/sub，`multi_sub` 使用 `set_sub_topics` 过滤子话题；`sub_node` 使用 `try_recv_raw` 接收原始 payload 并反序列化。
 
 运行示例（在项目根目录）：
 

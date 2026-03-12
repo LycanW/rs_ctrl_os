@@ -5,7 +5,7 @@ pub mod comms;
 pub mod time_sync;
 
 pub use error::{Result, RsCtrlError};
-pub use config::{ConfigManager, StaticBase};
+pub use config::{load_config_rcos, load_config_typed, ConfigManager, StaticBase};
 pub use discovery::{start_discovery, ServiceRegistry};
 pub use comms::PubSubManager;
 pub use time_sync::TimeSynchronizer;

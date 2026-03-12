@@ -5,6 +5,7 @@ port = 5561
 is_master = false
 publish_hz = 0
 subscribe_hz = 500
+dynamic_load_enable = true
 
 [static_config.subscribers]
 from_multi_pub = "multi_pub"

@@ -5,6 +5,7 @@ port = 5556
 is_master = false
 publish_hz = 0
 subscribe_hz = 1000
+dynamic_load_enable = true
 
 [static_config.subscribers]
 local_sub = "gateway_node_01"
