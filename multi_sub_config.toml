@@ -5,7 +5,7 @@ port = 5561
 is_master = false
 
 [static_config.subscribers]
-multi_sub = "multi_pub"
+multi_sub = "sensor"
 
 [dynamic]
 poll_interval_ms = 200

@@ -16,6 +16,8 @@ struct SubSocket {
 
 pub struct PubSubManager {
     pubs: HashMap<String, Socket>,
+    shared_pub: Option<Socket>,
+    shared_pub_topics: HashSet<String>,
     subs: HashMap<String, SubSocket>,
     registry: ServiceRegistry,
     pending_subs: HashMap<String, String>,
@@ -24,20 +26,24 @@ pub struct PubSubManager {
 
 impl PubSubManager {
     pub fn new(static_cfg: &StaticBase, registry: ServiceRegistry) -> Result<Self> {
-        let mut pubs = HashMap::new();
+        let pubs = HashMap::new();
         let mut subs = HashMap::new();
         let mut pending_subs = HashMap::new();
 
-        for (topic_key, target) in &static_cfg.publishers {
-            if target == "self" {
-                let socket = ZMQ_CONTEXT.socket(zmq::PUB)?;
-                let endpoint = format!("tcp://{}:{}", static_cfg.host, static_cfg.port);
-                socket.set_sndhwm(1000)?; 
-                socket.bind(&endpoint)?;
-                info!("📢 [PUB] '{}' bound to {}", topic_key, endpoint);
-                pubs.insert(topic_key.clone(), socket);
-            }
-        }
+        let self_topics: HashSet<String> = static_cfg.publishers.iter()
+            .filter(|(_, t)| *t == "self")
+            .map(|(k, _)| k.clone())
+            .collect();
+        let shared_pub = if self_topics.is_empty() {
+            None
+        } else {
+            let socket = ZMQ_CONTEXT.socket(zmq::PUB)?;
+            let endpoint = format!("tcp://{}:{}", static_cfg.host, static_cfg.port);
+            socket.set_sndhwm(1000)?;
+            socket.bind(&endpoint)?;
+            info!("📢 [PUB] bound to {} (topics: {:?})", endpoint, self_topics);
+            Some(socket)
+        };
 
         for (local_name, target_node_id) in &static_cfg.subscribers {
             if let Some((host, port)) = registry.get_address(target_node_id) {
@@ -50,6 +56,8 @@ impl PubSubManager {
 
         Ok(Self {
             pubs,
+            shared_pub,
+            shared_pub_topics: self_topics,
             subs,
             registry,
             pending_subs,
@@ -96,8 +104,13 @@ impl PubSubManager {
 
     /// 发布特定子话题 (Bincode 序列化)
     pub fn publish_topic<T: serde::Serialize>(&self, topic_key: &str, sub_topic: &str, data: &T) -> Result<()> {
-        let socket = self.pubs.get(topic_key)
-            .ok_or_else(|| RsCtrlError::Comms(format!("Pub key '{}' not found", topic_key)))?;
+        let socket = if self.shared_pub_topics.contains(topic_key) {
+            self.shared_pub.as_ref()
+                .ok_or_else(|| RsCtrlError::Comms(format!("Pub key '{}' not initialized", topic_key)))?
+        } else {
+            self.pubs.get(topic_key)
+                .ok_or_else(|| RsCtrlError::Comms(format!("Pub key '{}' not found", topic_key)))?
+        };
 
         let payload = bincode::serialize(data)?;
 
