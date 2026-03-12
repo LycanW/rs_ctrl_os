@@ -3,6 +3,7 @@ use crate::error::{Result, RsCtrlError};
 use crate::config::StaticBase;
 use bincode;
 use std::collections::{HashMap, HashSet};
+use std::time::{Duration, Instant};
 use zmq::{Context, Socket};
 use tracing::{info, warn, debug};
 use once_cell::sync::Lazy;
@@ -14,6 +15,11 @@ struct SubSocket {
     _topics: HashSet<String>,
 }
 
+/// Pub/Sub 管理器
+///
+/// - 发布频率控制：通过 `publish_hz` 限制 `publish_topic` 的最大发送速率。
+/// - 订阅频率控制：通过 `subscribe_hz` 限制 `try_recv_*` 的轮询频率。
+///   频率配置建议从各节点的 `[dynamic]` 中传入（如 `publish_hz` / `subscribe_hz`）。
 pub struct PubSubManager {
     pubs: HashMap<String, Socket>,
     shared_pub: Option<Socket>,
@@ -22,6 +28,12 @@ pub struct PubSubManager {
     registry: ServiceRegistry,
     pending_subs: HashMap<String, String>,
     my_id: String,
+
+    // 频率控制（节点级别）
+    publish_hz: i64,
+    subscribe_hz: i64,
+    last_publish: HashMap<String, Instant>,   // 按 topic_key 跟踪
+    last_sub_poll: HashMap<String, Instant>, // 按 local_name 跟踪
 }
 
 impl PubSubManager {
@@ -62,6 +74,10 @@ impl PubSubManager {
             registry,
             pending_subs,
             my_id: static_cfg.my_id.clone(),
+            publish_hz: static_cfg.publish_hz,
+            subscribe_hz: static_cfg.subscribe_hz,
+            last_publish: HashMap::new(),
+            last_sub_poll: HashMap::new(),
         })
     }
 
@@ -86,6 +102,24 @@ impl PubSubManager {
         Ok(())
     }
 
+    /// 设置节点级发布频率（Hz）。
+    ///
+    /// - `hz > 0`：对所有 `publish_topic` 生效，按最小时间间隔限频；
+    /// - `hz = 0`：动态频率（有多少发多快，仍受 ZMQ HWM 影响）。
+    /// - `hz < 0`：不发布（publish_topic 直接返回 Ok(())）。
+    pub fn set_publish_hz(&mut self, hz: i64) {
+        self.publish_hz = hz;
+    }
+
+    /// 设置节点级订阅/处理频率（Hz）。
+    ///
+    /// - `hz > 0`：对所有 `try_recv_*` 生效，按最小时间间隔限频；
+    /// - `hz = 0`：动态频率（按调用频率尝试收取）。
+    /// - `hz < 0`：不订阅/不消费（直接返回 Ok(None)）。
+    pub fn set_subscribe_hz(&mut self, hz: i64) {
+        self.subscribe_hz = hz;
+    }
+
     pub fn tick(&mut self) -> Result<()> {
         let mut to_connect = Vec::new();
         for (local_name, target_id) in &self.pending_subs.clone() {
@@ -103,7 +137,24 @@ impl PubSubManager {
     }
 
     /// 发布特定子话题 (Bincode 序列化)
-    pub fn publish_topic<T: serde::Serialize>(&self, topic_key: &str, sub_topic: &str, data: &T) -> Result<()> {
+    pub fn publish_topic<T: serde::Serialize>(&mut self, topic_key: &str, sub_topic: &str, data: &T) -> Result<()> {
+        // 1) 频率控制：如设置了 publish_hz，则按最小间隔丢弃过快的发送请求
+        if self.publish_hz < 0 {
+            // 全局禁止发布
+            return Ok(());
+        }
+        if self.publish_hz > 0 {
+            let now = Instant::now();
+            let min_interval = Duration::from_secs_f64(1.0 / self.publish_hz as f64);
+            if let Some(last) = self.last_publish.get(topic_key) {
+                if now.duration_since(*last) < min_interval {
+                    // 超过频率上限，直接丢弃本次发送请求
+                    return Ok(());
+                }
+            }
+            self.last_publish.insert(topic_key.to_string(), now);
+        }
+
         let socket = if self.shared_pub_topics.contains(topic_key) {
             self.shared_pub.as_ref()
                 .ok_or_else(|| RsCtrlError::Comms(format!("Pub key '{}' not initialized", topic_key)))?
@@ -125,7 +176,23 @@ impl PubSubManager {
     }
 
     /// 接收原始字节 (由用户反序列化)
-    pub fn try_recv_raw(&self, local_name: &str) -> Result<Option<(String, Vec<u8>)>> {
+    pub fn try_recv_raw(&mut self, local_name: &str) -> Result<Option<(String, Vec<u8>)>> {
+        // 1) 频率控制：如设置了 subscribe_hz，则按最小间隔限制轮询频率
+        if self.subscribe_hz < 0 {
+            // 全局禁止订阅/消费
+            return Ok(None);
+        }
+        if self.subscribe_hz > 0 {
+            let now = Instant::now();
+            let min_interval = Duration::from_secs_f64(1.0 / self.subscribe_hz as f64);
+            if let Some(last) = self.last_sub_poll.get(local_name) {
+                if now.duration_since(*last) < min_interval {
+                    return Ok(None);
+                }
+            }
+            self.last_sub_poll.insert(local_name.to_string(), now);
+        }
+
         // 如果订阅还没建立（例如仍在 pending_subs 中），返回 Ok(None) 表示当前没有可读数据
         let Some(sub_entry) = self.subs.get(local_name) else {
             return Ok(None);
@@ -147,7 +214,7 @@ impl PubSubManager {
     }
     
     /// 辅助：直接接收并反序列化为特定类型 (如果知道具体话题)
-    pub fn try_recv_specific<T: for<'de> serde::Deserialize<'de>>(&self, local_name: &str, target_sub: &str) -> Result<Option<T>> {
+    pub fn try_recv_specific<T: for<'de> serde::Deserialize<'de>>(&mut self, local_name: &str, target_sub: &str) -> Result<Option<T>> {
         if let Some((topic, bytes)) = self.try_recv_raw(local_name)? {
             if topic == target_sub {
                 let data = bincode::deserialize(&bytes)?;

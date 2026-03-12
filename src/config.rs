@@ -18,6 +18,16 @@ pub struct StaticBase {
     pub subscribers: HashMap<String, String>, 
     #[serde(default)]
     pub publishers: HashMap<String, String>, 
+    /// 发布频率（Hz），节点级上限：
+    /// - >0: 所有 topic 的 publish_topic 默认按该频率限速
+    /// - =0: 动态频率（有多少发多快）
+    /// - -1: 不发布（publish_topic 直接丢弃）
+    pub publish_hz: i64,
+    /// 订阅/处理频率（Hz），节点级上限：
+    /// - >0: 所有 try_recv_* 默认按该频率限速
+    /// - =0: 动态频率（按调用频率尝试收取）
+    /// - -1: 不订阅/不消费（try_recv_* 恒返回 None）
+    pub subscribe_hz: i64,
 }
 
 #[derive(Deserialize)]

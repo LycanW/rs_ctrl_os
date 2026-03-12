@@ -3,10 +3,10 @@ my_id = "sub_node"
 host = "127.0.0.1"
 port = 5556
 is_master = false
+publish_hz = 0
+subscribe_hz = 1000
 
 [static_config.subscribers]
-local_sub = "pub_node"
+local_sub = "gateway_node_01"
 
 [dynamic]
-poll_interval_ms = 200
-

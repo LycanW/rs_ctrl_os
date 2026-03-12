@@ -27,11 +27,12 @@ use rs_ctrl_os::{
 /// multi_sub = "multi_pub"
 ///
 /// [dynamic]
-/// poll_interval_ms = 200
+/// # 订阅频率 Hz；>0 固定频率，0 表示不订阅（示例中要求 >0）
+/// subscribe_hz = 500
 /// ```
 #[derive(Clone, Deserialize)]
 struct DynamicCfg {
-    poll_interval_ms: u64,
+    // 本示例不再从 dynamic 控制频率，仅保留占位以兼容 ConfigManager 泛型。
 }
 
 fn main() -> Result<()> {
@@ -56,9 +57,11 @@ fn main() -> Result<()> {
     )?;
 
     let mut bus = PubSubManager::new(&static_cfg, registry)?;
+    bus.set_publish_hz(static_cfg.publish_hz);
+    bus.set_subscribe_hz(static_cfg.subscribe_hz);
 
     loop {
-        let dyn_cfg = manager.get_dynamic_clone();
+        let _dyn_cfg = manager.get_dynamic_clone();
 
         // Drive pending_subs to actually connect to multi_pub once discovered.
         bus.tick()?;
@@ -87,7 +90,8 @@ fn main() -> Result<()> {
             }
         }
 
-        thread::sleep(Duration::from_millis(dyn_cfg.poll_interval_ms));
+        // 简单 sleep，真正的订阅频率由 PubSubManager::set_subscribe_hz 控制
+        thread::sleep(Duration::from_millis(1));
     }
 }
 

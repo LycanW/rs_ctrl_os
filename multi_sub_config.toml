@@ -3,10 +3,10 @@ my_id = "multi_sub"
 host = "127.0.0.1"
 port = 5561
 is_master = false
+publish_hz = 0
+subscribe_hz = 500
 
 [static_config.subscribers]
-multi_sub = "sensor"
+multi_sub = "sensor_imu"
 
 [dynamic]
-poll_interval_ms = 200
-

@@ -198,7 +198,6 @@ control = "self"
 
 [dynamic]
 message_prefix = "hello"
-interval_ms = 200
 ```
 
 ```rust
@@ -209,7 +208,8 @@ use rs_ctrl_os::ConfigManager;
 #[derive(Clone, Deserialize)]
 struct DynamicCfg {
     message_prefix: String,
-    interval_ms: u64,
+    publish_hz: u64,
+    subscribe_hz: u64,
 }
 
 fn main() -> rs_ctrl_os::Result<()> {
@@ -262,7 +262,7 @@ fn main() -> rs_ctrl_os::Result<()> {
 
     let bus = PubSubManager::new(&static_cfg, registry)?;
 
-    loop {
+        loop {
         let dyn_cfg = manager.get_dynamic_clone();
         let ts_ms = time_sync.now_corrected_ms();
 
@@ -278,7 +278,13 @@ fn main() -> rs_ctrl_os::Result<()> {
             println!("Received: {received}");
         }
 
-        thread::sleep(Duration::from_millis(dyn_cfg.interval_ms));
+        // 简单示例：按 subscribe_hz 驱动主循环节奏
+        let interval = if dyn_cfg.subscribe_hz > 0 {
+            Duration::from_secs_f64(1.0 / dyn_cfg.subscribe_hz as f64)
+        } else {
+            Duration::from_millis(100)
+        };
+        thread::sleep(interval);
     }
 }
 ```

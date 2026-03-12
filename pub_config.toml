@@ -3,6 +3,8 @@ my_id = "pub_node"
 host = "127.0.0.1"
 port = 5555
 is_master = true
+publish_hz = 1000
+subscribe_hz = 1000
 
 [static_config.publishers]
 control = "self"
