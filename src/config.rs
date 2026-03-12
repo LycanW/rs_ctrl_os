@@ -77,7 +77,11 @@ pub struct StaticBase {
     #[serde(default)]
     pub is_master: bool,
     #[serde(default)]
-    pub subscribers: HashMap<String, String>, 
+    pub subscribers: HashMap<String, String>,
+    /// 静态节点 fallback：node_id -> "host:port"。当 discovery 未找到目标时使用。
+    /// 支持无多播环境（Docker、云等）。
+    #[serde(default)]
+    pub static_nodes: HashMap<String, String>,
     #[serde(default)]
     pub publishers: HashMap<String, String>, 
     /// 发布频率（Hz），节点级上限：

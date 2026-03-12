@@ -48,9 +48,7 @@ fn main() -> Result<()> {
     bus.set_sub_topics("from_pub", &["demo"])?;
 
     loop {
-        // Drive pending_subs to actually connect once discovered.
-        bus.tick()?;
-
+        // try_recv_raw 内部自动 tick()，无需手动调用
         // 多端口（多远端节点）+ 多子话题：
         // - "from_multi_pub" 订阅 multi_pub 节点
         // - "from_pub"       订阅 pub_node 节点

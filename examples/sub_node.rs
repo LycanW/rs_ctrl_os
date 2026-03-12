@@ -56,10 +56,7 @@ fn main() -> Result<()> {
     bus.set_subscribe_hz(static_cfg.subscribe_hz);
 
     loop {
-        // Drive discovery connections
-        bus.tick()?;
-
-        // Drain all pending messages from "local_sub" and print them.
+        // try_recv_raw 内部自动 tick()，无需手动调用
         while let Some((topic, raw)) = bus.try_recv_raw("local_sub")? {
             // rs_ctrl_os publish_topic() uses bincode; can_bridge currently publishes a String(JSON) under sub_topic="data".
             if let Ok(s) = bincode::deserialize::<String>(&raw) {
@@ -75,7 +72,7 @@ fn main() -> Result<()> {
             }
         }
 
-        // 简单 sleep，真正的订阅频率由 PubSubManager::set_subscribe_hz 控制
+        // 简单 sleep，订阅频率由 PubSubManager::set_subscribe_hz 控制
         thread::sleep(Duration::from_millis(1));
     }
 }

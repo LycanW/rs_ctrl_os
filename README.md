@@ -18,7 +18,7 @@
 
 | 能力 | 说明 |
 |------|------|
-| **StaticBase 与 [static_config]** | 节点 ID、host、port、是否 master、publishers/subscribers 拓扑、publish_hz/subscribe_hz、dynamic_load_enable 等**运行所需的基础配置** |
+| **StaticBase 与 [static_config]** | 节点 ID、host、port、是否 master、publishers/subscribers 拓扑、static_nodes（IP fallback）、publish_hz/subscribe_hz、dynamic_load_enable 等**运行所需的基础配置** |
 | **配置加载机制** | 从 TOML 解析 `[static_config]`，提供 `load_config_rcos`、`load_config_typed`、`ConfigManager` 等 API |
 | **dynamic 热更新** | 当 `dynamic_load_enable=true` 时，监听配置文件变化并热重载 `[dynamic]` 内容 |
 | **消息通道** | ZMQ pub/sub、发现、时间同步、频率限速、原始字节透传（`publish_raw` / `try_recv_raw`） |
@@ -33,7 +33,7 @@
 
 ### 如何区分框架配置与业务配置
 
-- **`[static_config]`**：框架强依赖，**必须存在**。包含 `my_id`、`host`、`port`、`publish_hz`、`subscribe_hz`、`dynamic_load_enable`、`publishers`、`subscribers` 等。
+- **`[static_config]`**：框架强依赖，**必须存在**。包含 `my_id`、`host`、`port`、`publish_hz`、`subscribe_hz`、`dynamic_load_enable`、`publishers`、`subscribers`、`static_nodes`（可选）等。
 - **`[dynamic]`**：业务自由定义。框架不解析其具体字段，只负责按你提供的 `D` 反序列化并（可选）热更新。  
   例如：can_bridge 定义 `interfaces`、`devices`；相机节点定义 `camera_id`、`resolution`；点云节点定义 `voxel_size` 等。
 
@@ -48,7 +48,7 @@
 | **ConfigManager 热更新** | 当 `dynamic_load_enable=true` 时，通过 `notify` 监听配置文件。文件变化时自动重读并解析 `[dynamic]`，更新内部 `RwLock`，`get_dynamic_clone()` 返回最新值。 |
 | **发布频率控制** | 当 `publish_hz > 0` 时，`publish_topic` / `publish_raw` 内部按 `topic_key` 记录上次发送时间，超过最小间隔的请求会被静默丢弃（限频）。 |
 | **订阅频率控制** | 当 `subscribe_hz > 0` 时，`try_recv_raw` / `try_recv_specific` 内部按 `local_name` 记录上次轮询时间，未到间隔则直接返回 `None`，避免过度轮询。 |
-| **订阅连接建立** | 初始化时，若目标节点尚未发现，订阅会进入 `pending_subs`。应用需在主循环中调用 `bus.tick()`，框架检查 `ServiceRegistry`，一旦目标上线则自动建立 SUB 连接。 |
+| **订阅连接建立** | 初始化时，若 discovery 和 `static_nodes` 均未提供目标地址，订阅进入 `pending_subs`。`try_recv_raw` 内部自动 tick()，优先从 `ServiceRegistry` 解析，其次从 `static_nodes`（`node_id -> "host:port"`）fallback，**无需手动调用 tick()**。 |
 | **子话题过滤** | 若通过 `set_sub_topics` 设置了白名单，框架在 `try_recv_raw` 中只返回白名单内的 `sub_topic`，其它消息静默丢弃。 |
 
 ---
@@ -95,6 +95,10 @@ local_sub = "node1"
 
 [static_config.publishers]
 control = "self"
+
+# 可选：当 discovery 未找到目标时，用此地址直连（适合无多播环境）
+[static_config.static_nodes]
+# node1 = "127.0.0.1:5555"
 
 [dynamic]
 message_prefix = "hello"
@@ -175,7 +179,7 @@ interval_ms = 1000
   - **`load_config_rcos(path)`**：返回 `(StaticBase, toml::Value)`，框架解析 `[static_config]`，`[dynamic]` 以原始 `toml::Value` 返回，由应用自行反序列化。
   - **`load_config_typed::<D>(path)`**：返回 `(StaticBase, D)`，一次性加载，无热更新，适合无需动态重载的场景。
   - **`ConfigManager<D>`**：加载 `[static_config]` + `[dynamic]`，当 `StaticBase.dynamic_load_enable=true`（默认）时监听文件变化并热重载 `[dynamic]`。
-  - **`StaticBase`**：节点 ID、host、port、is_master、publishers/subscribers、publish_hz、subscribe_hz、dynamic_load_enable 等框架必需字段。
+  - **`StaticBase`**：节点 ID、host、port、is_master、publishers/subscribers、static_nodes（IP fallback）、publish_hz、subscribe_hz、dynamic_load_enable 等框架必需字段。
 - **节点发现（start_discovery + ServiceRegistry）**
   - 使用 UDP 多播地址 `224.0.0.100:9999` 定期发送/接收 `Heartbeat`。
   - 自动维护一个节点注册表 `ServiceRegistry`，可以通过 `get_address(node_id)` 获取对方地址。

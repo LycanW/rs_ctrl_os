@@ -11,4 +11,9 @@ dynamic_load_enable = true
 from_multi_pub = "multi_pub"
 from_pub       = "pub_node"
 
+# 可选：无多播时直连，注释掉则仅依赖 discovery
+[static_config.static_nodes]
+multi_pub = "127.0.0.1:5560"
+pub_node  = "127.0.0.1:5555"
+
 [dynamic]

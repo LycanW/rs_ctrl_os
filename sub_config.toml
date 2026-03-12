@@ -10,4 +10,8 @@ dynamic_load_enable = true
 [static_config.subscribers]
 local_sub = "gateway_node_01"
 
+# 可选：无多播时直连，注释掉则仅依赖 discovery
+[static_config.static_nodes]
+gateway_node_01 = "127.0.0.1:5610"
+
 [dynamic]

@@ -10,6 +10,20 @@ use once_cell::sync::Lazy;
 
 static ZMQ_CONTEXT: Lazy<Context> = Lazy::new(|| Context::new());
 
+/// 解析 "host:port" 或 "[::1]:port"，不进行 DNS 解析。
+fn parse_host_port(s: &str) -> Option<(String, u16)> {
+    let idx = s.rfind(':')?;
+    if idx == 0 {
+        return None;
+    }
+    let (host, port_part) = s.split_at(idx);
+    let port = port_part[1..].parse::<u16>().ok()?;
+    if host.is_empty() {
+        return None;
+    }
+    Some((host.to_string(), port))
+}
+
 struct SubSocket {
     socket: Socket,
     /// 若为空集，则不过滤 sub_topic；非空时，仅保留在集合内的 sub_topic。
@@ -27,6 +41,8 @@ pub struct PubSubManager {
     shared_pub_topics: HashSet<String>,
     subs: HashMap<String, SubSocket>,
     registry: ServiceRegistry,
+    /// node_id -> (host, port)，discovery 失败时的 fallback
+    static_nodes: HashMap<String, (String, u16)>,
     pending_subs: HashMap<String, String>,
     my_id: String,
 
@@ -58,8 +74,17 @@ impl PubSubManager {
             Some(socket)
         };
 
+        let static_nodes: HashMap<String, (String, u16)> = static_cfg
+            .static_nodes
+            .iter()
+            .filter_map(|(k, v)| parse_host_port(v).map(|hp| (k.clone(), hp)))
+            .collect();
+
         for (local_name, target_node_id) in &static_cfg.subscribers {
-            if let Some((host, port)) = registry.get_address(target_node_id) {
+            let addr = registry
+                .get_address(target_node_id)
+                .or_else(|| static_nodes.get(target_node_id).map(|(h, p)| (h.clone(), *p)));
+            if let Some((host, port)) = addr {
                 Self::connect_sub(&mut subs, local_name, target_node_id, &host, port)?;
             } else {
                 warn!("⏳ [SUB] '{}' waiting for '{}'", local_name, target_node_id);
@@ -73,6 +98,7 @@ impl PubSubManager {
             shared_pub_topics: self_topics,
             subs,
             registry,
+            static_nodes,
             pending_subs,
             my_id: static_cfg.my_id.clone(),
             publish_hz: static_cfg.publish_hz,
@@ -144,7 +170,15 @@ impl PubSubManager {
     pub fn tick(&mut self) -> Result<()> {
         let mut to_connect = Vec::new();
         for (local_name, target_id) in &self.pending_subs.clone() {
-            if let Some((host, port)) = self.registry.get_address(target_id) {
+            let addr = self
+                .registry
+                .get_address(target_id)
+                .or_else(|| {
+                    self.static_nodes
+                        .get(target_id)
+                        .map(|(h, p)| (h.clone(), *p))
+                });
+            if let Some((host, port)) = addr {
                 to_connect.push((local_name.clone(), target_id.clone(), host, port));
             }
         }
@@ -235,7 +269,11 @@ impl PubSubManager {
     }
 
     /// 接收原始字节 (由用户反序列化)
+    /// 内部自动调用 tick()，无需在主循环手动调用。
     pub fn try_recv_raw(&mut self, local_name: &str) -> Result<Option<(String, Vec<u8>)>> {
+        // 0) 自动驱动 pending 订阅连接（目标发现后自动建立）
+        let _ = self.tick();
+
         // 1) 频率控制：如设置了 subscribe_hz，则按最小间隔限制轮询频率
         if self.subscribe_hz < 0 {
             // 全局禁止订阅/消费
