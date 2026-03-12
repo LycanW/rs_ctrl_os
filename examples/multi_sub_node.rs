@@ -24,7 +24,8 @@ use rs_ctrl_os::{
 /// is_master = false
 ///
 /// [static_config.subscribers]
-/// multi_sub = "multi_pub"
+/// from_multi_pub = "multi_pub"
+/// from_pub       = "pub_node"
 ///
 /// [dynamic]
 /// # 订阅频率 Hz；>0 固定频率，0 表示不订阅（示例中要求 >0）
@@ -60,33 +61,34 @@ fn main() -> Result<()> {
     bus.set_publish_hz(static_cfg.publish_hz);
     bus.set_subscribe_hz(static_cfg.subscribe_hz);
 
+    // 只关心各远端节点下“一个” sub_topic：
+    // - from_multi_pub: 只订阅 demo_status
+    // - from_pub:       只订阅 demo
+    bus.set_sub_topics("from_multi_pub", &["demo_status"])?;
+    bus.set_sub_topics("from_pub", &["demo"])?;
+
     loop {
         let _dyn_cfg = manager.get_dynamic_clone();
 
-        // Drive pending_subs to actually connect to multi_pub once discovered.
+        // Drive pending_subs to actually connect once discovered.
         bus.tick()?;
 
-        // One SUB socket (local name "multi_sub"); distinguish streams by sub-topic.
-        if let Some((topic, bytes)) = bus.try_recv_raw("multi_sub")? {
-            // 原始二进制
-            // println!(
-            //     "[multi_sub][raw]  sub_topic='{}', len={}, bytes={:02X?}",
-            //     topic,
-            //     bytes.len(),
-            //     bytes
-            // );
-
-            // 尝试按 String 反序列化并打印解码后的内容
-            if let Ok(text) = bincode::deserialize::<String>(&bytes) {
-                println!(
-                    "[multi_sub][dec]  sub_topic='{}', text=\"{}\"",
-                    topic, text
-                );
-            } else {
-                println!(
-                    "[multi_sub][dec]  sub_topic='{}', <failed to deserialize as String>",
-                    topic
-                );
+        // 多端口（多远端节点）+ 多子话题：
+        // - "from_multi_pub" 订阅 multi_pub 节点
+        // - "from_pub"       订阅 pub_node 节点
+        for local_name in &["from_multi_pub", "from_pub"] {
+            if let Some((topic, bytes)) = bus.try_recv_raw(local_name)? {
+                if let Ok(text) = bincode::deserialize::<String>(&bytes) {
+                    println!(
+                        "[multi_sub][dec]  local='{}' sub_topic='{}' text=\"{}\"",
+                        local_name, topic, text
+                    );
+                } else {
+                    println!(
+                        "[multi_sub][dec]  local='{}' sub_topic='{}' <failed to deserialize as String>",
+                        local_name, topic
+                    );
+                }
             }
         }
 

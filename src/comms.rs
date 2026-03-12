@@ -12,7 +12,8 @@ static ZMQ_CONTEXT: Lazy<Context> = Lazy::new(|| Context::new());
 
 struct SubSocket {
     socket: Socket,
-    _topics: HashSet<String>,
+    /// 若为空集，则不过滤 sub_topic；非空时，仅保留在集合内的 sub_topic。
+    topics: HashSet<String>,
 }
 
 /// Pub/Sub 管理器
@@ -98,7 +99,7 @@ impl PubSubManager {
         socket.set_rcvhwm(1000)?;
 
         info!("🔗 [SUB] '{}' connected to {} (Target: {})", local_name, endpoint, target_id);
-        subs.insert(local_name.to_string(), SubSocket { socket, _topics: HashSet::new() });
+        subs.insert(local_name.to_string(), SubSocket { socket, topics: HashSet::new() });
         Ok(())
     }
 
@@ -118,6 +119,26 @@ impl PubSubManager {
     /// - `hz < 0`：不订阅/不消费（直接返回 Ok(None)）。
     pub fn set_subscribe_hz(&mut self, hz: i64) {
         self.subscribe_hz = hz;
+    }
+
+    /// 为指定本地订阅名配置需要保留的 sub_topic 列表。
+    ///
+    /// - `topics` 为空：不过滤任何 sub_topic（保留所有）。
+    /// - 非空：仅当收到的 sub_topic 在此列表中时才返回；其他 sub_topic 会被静默丢弃。
+    pub fn set_sub_topics<S: AsRef<str>>(
+        &mut self,
+        local_name: &str,
+        topics: &[S],
+    ) -> Result<()> {
+        let entry = self
+            .subs
+            .get_mut(local_name)
+            .ok_or_else(|| RsCtrlError::Comms(format!("SUB '{}' not found", local_name)))?;
+        entry.topics.clear();
+        for t in topics {
+            entry.topics.insert(t.as_ref().to_string());
+        }
+        Ok(())
     }
 
     pub fn tick(&mut self) -> Result<()> {
@@ -202,6 +223,14 @@ impl PubSubManager {
             Ok(frames) => {
                 if frames.len() < 3 { return Ok(None); }
                 let sub_topic = String::from_utf8_lossy(&frames[1]).to_string();
+
+                // 若为该本地订阅名配置了 sub_topic 过滤，只保留白名单内的 sub_topic。
+                if let Some(entry) = self.subs.get(local_name) {
+                    if !entry.topics.is_empty() && !entry.topics.contains(&sub_topic) {
+                        return Ok(None);
+                    }
+                }
+
                 let payload = frames[2].to_vec();
                 Ok(Some((sub_topic, payload)))
             }
