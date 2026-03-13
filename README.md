@@ -360,7 +360,7 @@ use rs_ctrl_os::{Result, RsCtrlError};
 
 ```toml
 [dependencies]
-rs_ctrl_os = "0.4.1"
+rs_ctrl_os = "0.4.2"
 ```
 或者也可以
 
