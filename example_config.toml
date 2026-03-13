@@ -1,0 +1,22 @@
+[static_config]
+my_id = "node1"
+host = "127.0.0.1"
+port = 5555
+is_master = true
+publish_hz = 1000
+subscribe_hz = 1000
+dynamic_load_enable = true
+
+[static_config.subscribers]
+local_sub = "node1"
+
+[static_config.publishers]
+control = "self"
+
+# 可选：当 discovery 未找到目标时，用此地址直连（适合无多播环境）
+[static_config.static_nodes]
+# node1 = "127.0.0.1:5555"
+
+[dynamic]
+message_prefix = "hello"
+interval_ms = 200

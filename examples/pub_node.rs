@@ -43,10 +43,8 @@ fn main() -> Result<()> {
     )?;
 
     // Publisher only: one PUB socket for topic "control"
+    // 频率由 static_config 的 publish_hz/subscribe_hz 提供，new() 时已注入
     let mut bus = PubSubManager::new(&static_cfg, registry)?;
-    // 频率控制由 rs_ctrl_os 封装：>0 固定频率，0 动态，<0 不发/不收
-    bus.set_publish_hz(static_cfg.publish_hz);
-    bus.set_subscribe_hz(static_cfg.subscribe_hz);
 
     loop {
         let dyn_cfg = manager.get_dynamic_clone();

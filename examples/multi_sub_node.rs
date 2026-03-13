@@ -38,8 +38,6 @@ fn main() -> Result<()> {
     )?;
 
     let mut bus = PubSubManager::new(&static_cfg, registry)?;
-    bus.set_publish_hz(static_cfg.publish_hz);
-    bus.set_subscribe_hz(static_cfg.subscribe_hz);
 
     // 只关心各远端节点下“一个” sub_topic：
     // - from_multi_pub: 只订阅 demo_status
@@ -68,7 +66,7 @@ fn main() -> Result<()> {
             }
         }
 
-        // 简单 sleep，真正的订阅频率由 PubSubManager::set_subscribe_hz 控制
+        // 简单 sleep，订阅限频由 static_config.subscribe_hz 控制（new 时已注入）
         thread::sleep(Duration::from_millis(1));
     }
 }

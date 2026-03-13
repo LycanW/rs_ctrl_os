@@ -63,8 +63,6 @@ fn main() -> Result<()> {
 
     // One process, single PUB socket (topic key "control"), multiple sub-topics
     let mut bus = PubSubManager::new(&static_cfg, registry)?;
-    bus.set_publish_hz(static_cfg.publish_hz);
-    bus.set_subscribe_hz(static_cfg.subscribe_hz);
 
     let mut counter: u64 = 0;
 

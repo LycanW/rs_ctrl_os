@@ -52,8 +52,6 @@ fn main() -> Result<()> {
 
     // Subscriber only: one SUB socket named "local_sub"
     let mut bus = PubSubManager::new(&static_cfg, registry)?;
-    bus.set_publish_hz(static_cfg.publish_hz);
-    bus.set_subscribe_hz(static_cfg.subscribe_hz);
 
     loop {
         // try_recv_raw 内部自动 tick()，无需手动调用
@@ -72,7 +70,7 @@ fn main() -> Result<()> {
             }
         }
 
-        // 简单 sleep，订阅频率由 PubSubManager::set_subscribe_hz 控制
+        // 简单 sleep，订阅限频由 static_config.subscribe_hz 控制（new 时已注入）
         thread::sleep(Duration::from_millis(1));
     }
 }

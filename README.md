@@ -33,7 +33,7 @@
 
 ### 如何区分框架配置与业务配置
 
-- **`[static_config]`**：框架强依赖，**必须存在**。包含 `my_id`、`host`、`port`、`publish_hz`、`subscribe_hz`、`dynamic_load_enable`、`publishers`、`subscribers`、`static_nodes`（可选）等。
+- **`[static_config]`**：框架强依赖，**必须存在**。包含 `my_id`、`host`、`port`、`is_master`、`publish_hz`、`subscribe_hz`、`dynamic_load_enable`、`publishers`、`subscribers`、`static_nodes`（可选）等。
 - **`[dynamic]`**：业务自由定义。框架不解析其具体字段，只负责按你提供的 `D` 反序列化并（可选）热更新。  
   例如：can_bridge 定义 `interfaces`、`devices`；相机节点定义 `camera_id`、`resolution`；点云节点定义 `voxel_size` 等。
 
@@ -66,11 +66,11 @@
 克隆本项目：
 
 ```bash
-git clone https://github.com/yourname/rs_ctrl_os.git
+git clone https://github.com/LycanW/rs_ctrl_os.git
 cd rs_ctrl_os
 ```
 
-或者使用cargo
+或者使用 cargo 添加依赖：
 
 ```bash
 cargo add rs_ctrl_os
@@ -111,12 +111,9 @@ interval_ms = 200
 cargo run --example pub_node -- example_config.toml
 ```
 
-你会看到终端持续打印收到的消息。此时 pub 和 sub 都在同一个进程里：
+`pub_node` 会持续往 `control` topic 发布消息。**注意**：当前 `pub_node` 示例仅发布、不订阅，因此不会打印收到的消息。若需同时收发，可参考 `examples/` 自行扩展，或运行两个进程（见下文）。
 
-- `control` topic 上不断发布字符串消息；
-- `local_sub` 订阅自己发出的数据并打印。
-
-如果你改动 `example_config.toml` 里的 `[dynamic]`（比如改前缀、改间隔）并保存，进程会自动加载新的动态配置：
+如果你改动配置文件里的 `[dynamic]`（比如改前缀、改间隔）并保存，进程会自动加载新的动态配置：
 
 - `message_prefix` 会改变打印出来的文本前缀；
 - `interval_ms` 会改变发送/接收的频率。
@@ -128,10 +125,9 @@ cargo run --example pub_node -- example_config.toml
 - `examples/pub_node.rs`
 - `examples/sub_node.rs`
 
-以及对应的：
+以及对应的 `pub_config.toml`、`sub_config.toml`。
 
-- `pub_config.toml`
-- `sub_config.toml`
+**配置说明**：`sub_config.toml` 中 `local_sub` 指向的 `target_node_id` 需与 `pub_node` 的 `my_id` 一致，才能收到 pub 的消息。仓库中的 `sub_config.toml` 可能指向其他节点（如 `gateway_node_01`），用于不同场景。若要 pub/sub 互通，可将 `[static_config.subscribers]` 改为 `local_sub = "pub_node"`，并配置 `static_nodes` 或依赖 discovery 解析地址。
 
 先打开一个终端作为发布端：
 
@@ -148,7 +144,7 @@ cargo run --example sub_node -- sub_config.toml
 此时：
 
 - `pub_node` 会按照 `pub_config.toml` 的 `[dynamic]` 配置，持续往 ZeroMQ PUB socket 上发消息。
-- `sub_node` 通过 UDP 多播发现 `pub_node`，连接上它的 PUB socket，然后不断从 `local_sub` 这个订阅名收消息并打印。
+- `sub_node` 通过 discovery 或 `static_nodes` 连接 `pub_node`，从 `local_sub` 收消息并打印。
 
 你可以动态修改 `pub_config.toml` 的 `[dynamic]`，比如：
 
@@ -173,25 +169,188 @@ interval_ms = 1000
 
 ---
 
-## 功能概览
+## API 参考
 
-- **配置管理**
-  - **`load_config_rcos(path)`**：返回 `(StaticBase, toml::Value)`，框架解析 `[static_config]`，`[dynamic]` 以原始 `toml::Value` 返回，由应用自行反序列化。
-  - **`load_config_typed::<D>(path)`**：返回 `(StaticBase, D)`，一次性加载，无热更新，适合无需动态重载的场景。
-  - **`ConfigManager<D>`**：加载 `[static_config]` + `[dynamic]`，当 `StaticBase.dynamic_load_enable=true`（默认）时监听文件变化并热重载 `[dynamic]`。
-  - **`StaticBase`**：节点 ID、host、port、is_master、publishers/subscribers、static_nodes（IP fallback）、publish_hz、subscribe_hz、dynamic_load_enable 等框架必需字段。
-- **节点发现（start_discovery + ServiceRegistry）**
-  - 使用 UDP 多播地址 `224.0.0.100:9999` 定期发送/接收 `Heartbeat`。
-  - 自动维护一个节点注册表 `ServiceRegistry`，可以通过 `get_address(node_id)` 获取对方地址。
-- **ZeroMQ Pub/Sub（PubSubManager）**
-  - 按 `StaticBase.publishers` 在本地绑定 PUB socket，按 `StaticBase.subscribers` 动态连接其他节点。
-  - **`publish_topic`**：bincode 序列化，适合结构化小消息（控制指令、状态等）。
-  - **`publish_raw`**：透传原始字节，适合图像、点云等已编码二进制，不经过 serde。
-  - **`try_recv_raw`**：返回 `(sub_topic, Vec<u8>)`，由应用自行解析。
-  - **`try_recv_specific`**：将 payload 反序列化为指定类型（bincode）。
-  - 消息格式为 **三帧 multipart**：`[节点 ID, sub_topic, payload]`。
-- **时间同步（TimeSynchronizer）**
-  - 通过 master 心跳中的 `clock_time_ms` 与本地时间对比，估算偏移，提供 `now_corrected_ms()`。
+### 1. 初始化
+
+#### `init_logging()`
+
+初始化 `tracing` 日志，默认 INFO 级别。应在 `main` 入口处调用一次。
+
+```rust
+use rs_ctrl_os::init_logging;
+init_logging();
+```
+
+---
+
+### 2. 配置管理
+
+#### `load_config_rcos(path) -> Result<(StaticBase, toml::Value)>`
+
+从 TOML 加载配置，返回框架静态配置 + 原始 `[dynamic]`（`toml::Value`）。  
+适用于需要手动反序列化 `[dynamic]` 或只需 `static_config` 的场景。  
+- **path**：配置文件路径（`impl AsRef<Path>`）  
+- **返回**：`(StaticBase, toml::Value)`，`[dynamic]` 缺失时返回空表
+
+#### `load_config_typed::<D>(path) -> Result<(StaticBase, D)>`
+
+一次性加载配置，返回强类型 `(StaticBase, D)`。无文件监听，无热更新开销。  
+- **D**：需实现 `Deserialize`，对应 `[dynamic]` 结构  
+- **适用**：不需要热重载的节点
+
+#### `ConfigManager<D>`
+
+带热重载的配置管理器。当 `dynamic_load_enable=true` 时，通过 `notify` 监听文件变化并自动重载 `[dynamic]`。
+
+| 方法 | 签名 | 说明 |
+|------|------|------|
+| `new` | `new(config_path: &Path) -> Result<Self>` | 加载配置并（可选）启动文件监听 |
+| `static_cfg` | `static_cfg(&self) -> &StaticBase` | 获取静态配置引用 |
+| `get_dynamic_clone` | `get_dynamic_clone(&self) -> D` | 获取当前 `[dynamic]` 的克隆（热更新后为最新值） |
+| `config_path` | `config_path(&self) -> &Path` | 配置文件路径 |
+
+**D 约束**：`Clone + Deserialize + Send + Sync + 'static`
+
+#### `StaticBase`
+
+框架静态配置结构体，从 TOML `[static_config]` 解析。
+
+| 字段 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `my_id` | `String` | - | 本节点唯一 ID |
+| `host` | `String` | - | 本节点监听地址（如 `127.0.0.1`） |
+| `port` | `u16` | - | 本节点监听端口 |
+| `is_master` | `bool` | `false` | 是否作为时间同步 master |
+| `publishers` | `HashMap<String, String>` | `{}` | `topic_key -> "node_id"` 或 `"self"`（本地绑定） |
+| `subscribers` | `HashMap<String, String>` | `{}` | `local_name -> target_node_id` |
+| `static_nodes` | `HashMap<String, String>` | `{}` | `node_id -> "host:port"`，discovery 失败时的 fallback |
+| `publish_hz` | `i64` | - | 发布频率上限：`>0` 限频，`0` 不限，`<0` 禁止发布 |
+| `subscribe_hz` | `i64` | - | 订阅轮询频率：`>0` 限频，`0` 不限，`<0` 禁止订阅 |
+| `dynamic_load_enable` | `bool` | `true` | 是否启用 `[dynamic]` 热更新 |
+
+---
+
+### 3. 节点发现
+
+#### `start_discovery(...) -> Result<ServiceRegistry>`
+
+```rust
+pub fn start_discovery(
+    my_id: &str,
+    my_host: &str,
+    my_port: u16,
+    is_master: bool,
+    time_sync: Option<Arc<TimeSynchronizer>>,
+) -> Result<ServiceRegistry>
+```
+
+启动 UDP 多播发现（`224.0.0.100:9999`）。后台线程每 1 秒广播心跳，接收其他节点心跳并更新注册表。  
+- **time_sync**：传入 `TimeSynchronizer` 时，会从 master 心跳中提取 `clock_time_ms` 进行时间同步  
+- **返回**：共享的 `ServiceRegistry`，供 `PubSubManager` 解析订阅目标地址
+
+#### `ServiceRegistry`
+
+节点注册表，内部维护 `node_id -> (host, port, timestamp)`。
+
+| 方法 | 签名 | 说明 |
+|------|------|------|
+| `new` | `new() -> Self` | 创建空注册表 |
+| `register` | `register(&self, hb: &Heartbeat)` | 注册/更新节点（框架内部使用） |
+| `get_address` | `get_address(&self, node_id: &str) -> Option<(String, u16)>` | 根据 node_id 获取 `(host, port)` |
+| `cleanup` | `cleanup(&self, timeout_secs: u64)` | 剔除超时未心跳的节点（框架内部每轮调用） |
+
+#### `Heartbeat`
+
+心跳消息结构（JSON 序列化，用于发现协议）。通过 `rs_ctrl_os::discovery::Heartbeat` 访问（未在 crate 根重导出）。
+
+```rust
+pub struct Heartbeat {
+    pub node_id: String,
+    pub host: String,
+    pub port: u16,
+    pub timestamp: u64,
+    pub clock_time_ms: u64,
+    pub is_master: bool,
+}
+```
+
+---
+
+### 4. ZeroMQ Pub/Sub（PubSubManager）
+
+#### 创建
+
+```rust
+pub fn new(static_cfg: &StaticBase, registry: ServiceRegistry) -> Result<Self>
+```
+
+根据 `static_config` 的 `publishers`/`subscribers` 绑定 PUB、连接 SUB。`target = "self"` 的 topic 共用本机 PUB socket。
+
+#### 频率与过滤
+
+| 方法 | 签名 | 说明 |
+|------|------|------|
+| `set_publish_hz` | `set_publish_hz(&mut self, hz: i64)` | **覆盖**发布频率。`new()` 已从 `static_config` 注入，通常无需调用；仅在运行时需修改时使用 |
+| `set_subscribe_hz` | `set_subscribe_hz(&mut self, hz: i64)` | **覆盖**订阅轮询频率。同上，一般依赖配置即可 |
+| `set_sub_topics` | `set_sub_topics(&mut self, local_name: &str, topics: &[S]) -> Result<()>` | 为 `local_name` 设置 sub_topic 白名单，仅返回列表内的消息；空列表表示不过滤 |
+| `tick` | `tick(&mut self) -> Result<()>` | 尝试为 `pending_subs` 建立连接；`try_recv_raw` 内部会自动调用，一般无需手动调用 |
+
+#### 发布
+
+| 方法 | 签名 | 说明 |
+|------|------|------|
+| `publish_topic` | `publish_topic<T: Serialize>(&mut self, topic_key: &str, sub_topic: &str, data: &T) -> Result<()>` | Bincode 序列化后发送，适合结构化小消息 |
+| `publish_raw` | `publish_raw(&mut self, topic_key: &str, sub_topic: &str, payload: &[u8]) -> Result<()>` | 透传原始字节，适合图像、点云等已编码数据 |
+
+**消息格式**：ZMQ 三帧 multipart `[节点ID, sub_topic, payload]`
+
+**频率控制**：当 `publish_hz > 0` 时，按 `topic_key` 限频，超频请求静默丢弃。
+
+#### 接收
+
+| 方法 | 签名 | 说明 |
+|------|------|------|
+| `try_recv_raw` | `try_recv_raw(&mut self, local_name: &str) -> Result<Option<(String, Vec<u8>)>>` | 非阻塞接收，返回 `(sub_topic, payload)`；内部自动 `tick()` 并做频率限制 |
+| `try_recv_specific` | `try_recv_specific<T: Deserialize>(&mut self, local_name: &str, target_sub: &str) -> Result<Option<T>>` | 仅当 `sub_topic == target_sub` 时用 bincode 反序列化为 `T`，否则返回 `None` |
+
+**频率控制**：当 `subscribe_hz > 0` 时，按 `local_name` 限频，未到间隔返回 `None`。
+
+---
+
+### 5. 时间同步（TimeSynchronizer）
+
+主从时钟同步，从 `is_master=true` 的心跳中提取 `clock_time_ms` 计算偏移。
+
+| 方法 | 签名 | 说明 |
+|------|------|------|
+| `new` | `new() -> Self` | 创建同步器，初始未同步 |
+| `update_from_master` | `update_from_master(&self, master_id: &str, master_ts_ms: u64)` | 由发现模块内部调用，应用一般不直接使用 |
+| `now_corrected_ms` | `now_corrected_ms(&self) -> u64` | 返回经偏移修正的当前时间（毫秒） |
+| `is_synced` | `is_synced(&self) -> bool` | 是否已与 master 同步 |
+
+**用法**：将 `Arc::new(TimeSynchronizer::new())` 传入 `start_discovery`，之后用 `now_corrected_ms()` 获取协调后的时间戳。
+
+---
+
+### 6. 错误类型
+
+```rust
+use rs_ctrl_os::{Result, RsCtrlError};
+```
+
+| 变体 | 说明 |
+|------|------|
+| `Config(String)` | 配置加载/解析错误 |
+| `Comms(String)` | 通信错误（如 topic 未找到） |
+| `Serialization(String)` | 序列化错误 |
+| `Discovery(String)` | 发现模块错误 |
+| `NodeNotFound(String)` | 注册表中无此 node_id |
+| `Io(std::io::Error)` | IO 错误 |
+| `Zmq(zmq::Error)` | ZeroMQ 错误 |
+| `Bincode(Box<bincode::ErrorKind>)` | Bincode 序列化/反序列化错误 |
+
+所有 API 返回 `rs_ctrl_os::Result<T>`，可用 `?` 传播。
 
 ---
 
@@ -201,7 +360,12 @@ interval_ms = 1000
 
 ```toml
 [dependencies]
-rs_ctrl_os = "0.1"
+rs_ctrl_os = "0.4.1"
+```
+或者也可以
+
+```bash
+cargo add rs_ctrl_os
 ```
 
 你也可以通过路径依赖 / git 依赖方式在本地使用：
@@ -323,6 +487,8 @@ fn main() -> rs_ctrl_os::Result<()> {
 
 ### 4. 创建 Pub/Sub 管理器并发送消息
 
+以下片段需与步骤 1（**方式一** ConfigManager）、步骤 3 组合使用，才能获得 `manager`、`static_cfg`、`registry`、`time_sync`。
+
 ```rust
 use rs_ctrl_os::PubSubManager;
 use std::thread;
@@ -330,11 +496,11 @@ use std::time::Duration;
 
 fn main() -> rs_ctrl_os::Result<()> {
     init_logging();
-    // ... 加载配置 + start_discovery
+    // ... 步骤 1（ConfigManager）+ 步骤 3（start_discovery），得到 manager, static_cfg, registry, time_sync
 
-    let bus = PubSubManager::new(&static_cfg, registry)?;
+    let mut bus = PubSubManager::new(&static_cfg, registry)?;
 
-        loop {
+    loop {
         let dyn_cfg = manager.get_dynamic_clone();
         let ts_ms = time_sync.now_corrected_ms();
 
@@ -354,8 +520,8 @@ fn main() -> rs_ctrl_os::Result<()> {
         }
 
         // 简单示例：按 subscribe_hz 驱动主循环节奏
-        let interval = if dyn_cfg.subscribe_hz > 0 {
-            Duration::from_secs_f64(1.0 / dyn_cfg.subscribe_hz as f64)
+        let interval = if static_cfg.subscribe_hz > 0 {
+            Duration::from_secs_f64(1.0 / static_cfg.subscribe_hz as f64)
         } else {
             Duration::from_millis(100)
         };
@@ -368,8 +534,21 @@ fn main() -> rs_ctrl_os::Result<()> {
 
 ## 示例（examples）
 
+### 内置示例
+
 - `examples/pub_node.rs` / `examples/sub_node.rs`：单 pub + 单 sub，pub 使用 `ConfigManager` 热重载，sub 使用 `load_config_typed` 一次性加载。
-- `examples/multi_pub_node.rs` / `examples/multi_sub_node.rs`：多子话题 pub/sub，`multi_sub` 使用 `set_sub_topics` 过滤子话题；`sub_node` 使用 `try_recv_raw` 接收原始 payload 并反序列化。
+- `examples/multi_pub_node.rs` / `examples/multi_sub_node.rs`：多子话题 pub/sub，`multi_sub_node` 使用 `set_sub_topics` 过滤子话题；两者均通过 `try_recv_raw` 接收原始 payload 并自行反序列化。
+
+### 实际项目示例
+
+**[can_bridge](https://github.com/LycanW/can_bridge)**：CAN 总线网关，将 Linux SocketCAN 与 ZeroMQ 打通，实现 CAN ↔ 分布式消息的双向桥接。基于 rs_ctrl_os 构建，典型用法包括：
+
+- 使用 `ConfigManager` 加载配置并热重载 `[dynamic]`（接口、设备、控制开关等）
+- `start_discovery` + `PubSubManager` 实现传感器数据发布（`sensor_mit` / `sensor_dji` / `sensor_imu`）与控制指令订阅（`ctrl_mit` / `ctrl_dji`）
+- `publish_topic` 发布解析后的传感器 JSON，`try_recv_raw` 接收控制命令
+- `[static_config]` 完全遵循 rs_ctrl_os 规范
+
+可作为将 rs_ctrl_os 应用于机器人/嵌入式桥接场景的参考。
 
 运行示例（在项目根目录）：
 
@@ -396,7 +575,9 @@ use rs_ctrl_os::{Result, RsCtrlError};
 
 - 配置错误：`Config(String)`
 - 通信错误：`Comms(String)`
+- 序列化错误：`Serialization(String)`
 - 发现错误：`Discovery(String)`
+- 节点未找到：`NodeNotFound(String)`
 - IO 错误：`Io(std::io::Error)`
 - ZeroMQ 错误：`Zmq(zmq::Error)`
 - Bincode 序列化错误：`Bincode(Box<bincode::ErrorKind>)`
@@ -408,5 +589,5 @@ use rs_ctrl_os::{Result, RsCtrlError};
 ## 许可证
 
 本项目采用 **MIT** 许可证发布。  
-详见 `LICENSE-MIT` 文件。
+详见 `LICENSE` 文件。
 
