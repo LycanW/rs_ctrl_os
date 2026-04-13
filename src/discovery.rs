@@ -47,9 +47,10 @@ impl ServiceRegistry {
     }
 
     pub fn cleanup(&self, timeout_secs: u64) {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
+        let timeout_ms = timeout_secs.saturating_mul(1000);
         if let Ok(mut map) = self.nodes.write() {
-            map.retain(|_, (_, _, ts)| now.saturating_sub(*ts) < timeout_secs);
+            map.retain(|_, (_, _, ts)| now_ms.saturating_sub(*ts) < timeout_ms);
         }
     }
 }
