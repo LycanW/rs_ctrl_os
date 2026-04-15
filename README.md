@@ -39,11 +39,21 @@
 6. 循环内：**`publish_raw` / `try_recv_raw`**；收到消息时释放 **`str_free` / `payload_free`**。
 7. 退出：**`pubsub_destroy` → `time_sync_destroy` → `config_destroy`**（顺序与创建相反亦可，但不要对已交给 pubsub 的 registry 再 destroy）。
 
-### `[dynamic]` 与热更新（C 侧要点）
+### `[dynamic]` 与热更新：谁在做什么？
 
-- C API **不**解析 `[dynamic]` 的字段语义；框架在 **`dynamic_load_enable=true`** 时用 `notify` 监听文件，热重载后 **`get_dynamic_toml` 返回的字符串会变**。
-- 典型用法：主循环里 **周期性调用 `get_dynamic_toml`**，用 **TOML 解析库**（如 **tomlc99、libtoml**）或手写解析（`tutorial_node.c` 为极简行解析示例）。这样与 **磁盘上的 `[dynamic]`** 表示一致，无需在 C 侧再学一套 JSON 形态。
-- 修改 TOML 后保存即可触发重载；若 **`dynamic_load_enable=false`**，则只有进程启动时读到的内容有效。
+**已经在 rs_ctrl_os（FFI 内部）做完的**（与 C 是否“会 TOML”无关）：
+
+- **`rs_ctrl_os_config_open`** 创建 **`ConfigManager<toml::Value>`**，等价于 Rust 侧的 **`ConfigManager::new`**。
+- 当 **`dynamic_load_enable=true`** 时，Rust 里 **`notify` 监听配置文件**；文件变更后 **重新读取并解析 TOML 的 `[dynamic]`**，更新内存中的 **`toml::Value`**。  
+  **C 不需要、也不应该**自己去 `fopen` / 解析整份 TOML 来做热重载。
+
+**C 侧仍然要做的**（仅此一层，和“重载”是两件事）：
+
+- 框架 **只负责**「存好并热更新 **`[dynamic]` 这一段表**」，**不定义**你业务里有哪些键（电机参数、相机参数等），因此 **没有**「按字段名的 C getter」这种强类型 API。
+- 你的进程若要根据 `message_prefix`、`interval_ms` 等 **驱动自己的逻辑**，需要 **轮询 `get_dynamic_toml`**，拿到 **当前快照的 TOML 文本**，再用 **tomlc99 / libtoml** 或手写解析读出字段。  
+  这是在读 **业务配置**，不是在做 **文件监听与重载**；后者 **已全部在 rcos 里实现**。
+
+**一句话**：TOML 的 **监听 + 重载 + 解析进内存** = rcos；C 只负责 **从快照里取出自己关心的字段**。
 
 ### 链接（C 程序）
 

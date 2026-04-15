@@ -233,8 +233,9 @@ pub unsafe extern "C" fn rs_ctrl_os_config_destroy(p: *mut RcOsConfig) {
     }
 }
 
-/// Returns the current `[dynamic]` table as **TOML text** (same style as in the config file,
-/// without a `[dynamic]` header line — only the key/value lines). Caller must `rs_ctrl_os_str_free`.
+/// Returns the current `[dynamic]` table as **TOML text** (key/value lines; no `[dynamic]` header).
+/// Hot reload is handled inside `ConfigManager` when `dynamic_load_enable` is true; this only
+/// serializes the in-memory snapshot. Caller must `rs_ctrl_os_str_free`.
 #[no_mangle]
 pub unsafe extern "C" fn rs_ctrl_os_config_get_dynamic_toml(
     cfg: *const RcOsConfig,

@@ -60,8 +60,10 @@ RcOsConfig *rs_ctrl_os_config_open(const char *path_utf8);
 void rs_ctrl_os_config_destroy(RcOsConfig *p);
 
 /**
- * Allocates TOML text for the current `[dynamic]` table (key/value lines only, no section header).
- * Matches the on-disk format style; use libtoml / tomlc99 / etc. in production. Caller: rs_ctrl_os_str_free.
+ * Returns a snapshot of the current `[dynamic]` table as TOML text (key/value lines only).
+ * File watch + reload when dynamic_load_enable=true are done inside rs_ctrl_os; this call only
+ * reads the in-memory value. Caller frees with rs_ctrl_os_str_free. Use a TOML parser in app
+ * code to read fields; the library does not interpret [dynamic] schema.
  */
 rcos_err_t rs_ctrl_os_config_get_dynamic_toml(const RcOsConfig *cfg, char **out_toml);
 
