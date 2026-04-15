@@ -13,10 +13,10 @@ use tracing::{info, warn};
 /// TOML 必须包含 `[static_config]`；`[dynamic]` 可选，缺失时返回空表。
 /// 
 /// # 示例
-/// ```
+/// ```ignore
 /// // 仅需 static_config
 /// let (static_cfg, _) = rs_ctrl_os::load_config_rcos("config.toml")?;
-/// 
+///
 /// // 需要 typed dynamic
 /// let (static_cfg, dyn_val) = rs_ctrl_os::load_config_rcos("config.toml")?;
 /// let dynamic: MyDynamicConfig = toml::from_str(&toml::to_string(&dyn_val)?)?;
@@ -50,7 +50,7 @@ pub fn load_config_rcos(path: impl AsRef<Path>) -> Result<(StaticBase, toml::Val
 /// 封装 `load_config_rcos` + dynamic 反序列化，业务无需手写 toml 转换。
 ///
 /// # 示例
-/// ```
+/// ```ignore
 /// let (static_cfg, dynamic) = rs_ctrl_os::load_config_typed::<MyDynamicConfig>("config.toml")?;
 /// ```
 pub fn load_config_typed<D>(path: impl AsRef<Path>) -> Result<(StaticBase, D)>

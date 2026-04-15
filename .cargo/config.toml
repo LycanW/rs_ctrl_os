@@ -1,0 +1,5 @@
+# zmq-sys builds bundled libzmq with C++; default `c++` may be clang without libstdc++ headers.
+# Use GCC for C/C++ when compiling this crate on Linux.
+[env]
+CXX = "g++"
+CC = "gcc"

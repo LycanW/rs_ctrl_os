@@ -3,6 +3,7 @@ pub mod config;
 pub mod discovery;
 pub mod comms;
 pub mod time_sync;
+pub mod ffi;
 
 pub use error::{Result, RsCtrlError};
 pub use config::{load_config_rcos, load_config_typed, ConfigManager, StaticBase};

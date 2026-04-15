@@ -1,6 +1,6 @@
 [package]
 name = "rs_ctrl_os"
-version = "0.4.2"
+version = "0.5.0"
 edition = "2021"
 authors = ["Han Wang <wanghan0410@126.com>"]
 description = "A small runtime library for node discovery, ZeroMQ pub/sub messaging, dynamic TOML config reloading, and simple time synchronization in distributed Rust systems."
@@ -11,12 +11,16 @@ readme = "README.md"
 keywords = ["distributed", "zmq", "pubsub", "config", "time-sync"]
 categories = ["network-programming", "config", "concurrency"]
 
+[lib]
+crate-type = ["lib", "staticlib"]
+
 [dependencies]
 bincode = "1.3.3"
 notify = "8.2.0"
 once_cell = "1.21.3"
 serde = {version="1.0.228",features = ["derive"] }
 serde_json = "1.0.133"
+libc = "0.2.174"
 thiserror = "2.0.18"
 time = "0.3.47"
 tokio = "1.50.0"

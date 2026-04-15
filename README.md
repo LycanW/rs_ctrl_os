@@ -12,6 +12,59 @@
 
 ---
 
+## C / C++ API（预编译静态库）
+
+自 **v0.5.0** 起，本库提供 **稳定 C ABI**（`include/rs_ctrl_os.h`）与 **`staticlib` 产物 `librs_ctrl_os.a`**，便于在 **C/C++ 工程** 中链接。**官方 Release 不发布 `librs_ctrl_os.so`**；若需要动态库，请自行克隆源码并在 `Cargo.toml` 的 `[lib] crate-type` 中加入 `"cdylib"` 后编译。
+
+### 预编译包（GitHub Releases）
+
+在仓库上 **推送形如 `v0.5.0` 的 tag** 后，GitHub Actions 会构建并上传 **两个 glibc 压缩包**（文件名随版本变化）：
+
+| 资产 | 说明 |
+|------|------|
+| `rs_ctrl_os-<版本>-glibc-x86_64.tar.gz` | `x86_64-unknown-linux-gnu` |
+| `rs_ctrl_os-<版本>-glibc-aarch64.tar.gz` | `aarch64-unknown-linux-gnu` |
+
+每个包内含：
+
+- `librs_ctrl_os.a` — 静态库（链接进你的可执行文件）
+- `include/rs_ctrl_os.h` — C 头文件
+- `SHA256SUMS` — 校验文件
+
+**不包含**：`libzmq`（请使用系统或 SDK 提供的 `-lzmq`）、源码中的 `c_examples/`（示例留在仓库内）。
+
+**glibc 说明**：预编译库在 **Ubuntu 22.04 / 24.04** 类 CI 镜像上构建；若你的运行环境 **glibc 更旧**，可能无法链接或运行，请在本机 **`cargo build --release`** 自行编译。
+
+### 链接示例（C）
+
+解压后假设当前目录含有 `librs_ctrl_os.a` 与 `include/rs_ctrl_os.h`。`zmq` crate 默认会静态编译 bundled libzmq，其中含 **C++** 目标文件，因此用 **gcc 链 C 主程序时通常需要 `-lstdc++`**：
+
+```bash
+gcc -O2 -o myapp myapp.c \
+  ./librs_ctrl_os.a \
+  -lzmq -lstdc++ -lpthread -ldl -lm
+```
+
+完整示例见仓库 **`c_examples/minimal.c`**。
+
+### 从源码构建（Rust 开发者）
+
+```bash
+cargo build --release
+# 静态库路径：target/release/librs_ctrl_os.a
+```
+
+本仓库带有 **`.cargo/config.toml`**，将 **`CXX=g++` / `CC=gcc`** 传给 `zmq-sys` 的 bundled 构建，避免默认 `c++` 指向 **无 libstdc++ 头文件** 的 clang 而导致编译失败。若你环境不同可自行覆盖。
+
+### C API 行为摘要
+
+- 配置：`rs_ctrl_os_config_open` 打开完整 TOML；`rs_ctrl_os_config_get_dynamic_json` 返回 **`[dynamic]` 的 JSON**（需 `rs_ctrl_os_str_free`）。
+- 发现：`rs_ctrl_os_discovery_start` 返回 registry；**`rs_ctrl_os_pubsub_new` 会消费（接管）registry**，成功后 **不要**再 `rs_ctrl_os_registry_destroy`；若 `pubsub_new` 失败需自行 `registry_destroy`。
+- 收发：`rs_ctrl_os_pubsub_publish_raw`、`rs_ctrl_os_pubsub_try_recv_raw`；收到消息时对 `sub_topic_out` / `payload_out` 分别 `str_free` / `payload_free`。
+- 错误：多数函数返回 `rcos_err_t`；失败详情见 `rs_ctrl_os_last_error`。
+
+---
+
 ## 框架能力与边界
 
 ### 框架负责什么
@@ -360,7 +413,7 @@ use rs_ctrl_os::{Result, RsCtrlError};
 
 ```toml
 [dependencies]
-rs_ctrl_os = "0.4.2"
+rs_ctrl_os = "0.5.0"
 ```
 或者也可以
 
