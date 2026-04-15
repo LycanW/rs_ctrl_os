@@ -7,6 +7,8 @@
  *
  * Run:
  *   ./build/rcos_minimal /path/to/config.toml
+ *
+ * 更完整的 C 示例（动态 JSON、publish 循环）见同目录 **tutorial_node.c**（目标 **rcos_tutorial_c**）。
  */
 #include <cstdint>
 #include <iostream>
