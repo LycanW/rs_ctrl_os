@@ -14,67 +14,89 @@
 
 ## C / C++ API（预编译静态库）
 
-自 **v0.5.0** 起，本库提供 **稳定 C ABI**（`include/rs_ctrl_os.h`）与 `**staticlib` 产物 `librs_ctrl_os.a`**，便于在 **C/C++ 工程** 中链接。**官方 Release 不发布 `librs_ctrl_os.so`**；若需要动态库，请自行克隆源码并在 `Cargo.toml` 的 `[lib] crate-type` 中加入 `"cdylib"` 后编译。
+自 **v0.5.0** 起，本库提供 **稳定 C ABI**（`include/rs_ctrl_os.h`）与 **`staticlib` 产物 `librs_ctrl_os.a`**，便于在 **C/C++** 中链接。**官方 Release 不发布 `librs_ctrl_os.so`**；需要动态库时请自行在 `Cargo.toml` 的 `[lib] crate-type` 中加入 `"cdylib"` 后从源码编译。
 
 ### 预编译包（GitHub Releases）
 
-在仓库上 **推送形如 `v0.5.0` 的 tag** 后，GitHub Actions 会构建并上传 **两个 glibc 压缩包**（文件名随版本变化）：
+推送 **`v*`** 形式的 tag 后，CI 会上传 **glibc** 下的两个压缩包：
 
-
-| 资产                                     | 说明                          |
-| -------------------------------------- | --------------------------- |
-| `rs_ctrl_os-<版本>-glibc-x86_64.tar.gz`  | `x86_64-unknown-linux-gnu`  |
+| 资产 | 说明 |
+|------|------|
+| `rs_ctrl_os-<版本>-glibc-x86_64.tar.gz` | `x86_64-unknown-linux-gnu` |
 | `rs_ctrl_os-<版本>-glibc-aarch64.tar.gz` | `aarch64-unknown-linux-gnu` |
 
+每个包内含：`librs_ctrl_os.a`、`include/rs_ctrl_os.h`、`SHA256SUMS`。**不包含** `libzmq`（由系统/SDK 提供 `-lzmq`）。
 
-每个包内含：
+**glibc**：制品在 Ubuntu 22.04/24.04 类环境构建；若目标机 glibc 更旧，请在本机 `cargo build --release` 自行生成 `.a`。
 
-- `librs_ctrl_os.a` — 静态库（链接进你的可执行文件）
-- `include/rs_ctrl_os.h` — C 头文件
-- `SHA256SUMS` — 校验文件
+### 集成流程（建议顺序）
 
-**不包含**：`libzmq`（请使用系统或 SDK 提供的 `-lzmq`）、源码中的 `c_examples/`（示例留在仓库内）。
+1. **`rs_ctrl_os_init_logging()`**（可选，便于看 `tracing` 日志）。
+2. **`rs_ctrl_os_config_open(path)`** — 打开含 `[static_config]` 与 `[dynamic]` 的 TOML；失败时查 `rs_ctrl_os_last_error`。
+3. 用 **`rs_ctrl_os_config_get_*`** 读静态字段；用 **`rs_ctrl_os_config_get_dynamic_json`** 取 **`[dynamic]` 整段 JSON**（每次调用分配新串，用完 **`rs_ctrl_os_str_free`**）。
+4. **`rs_ctrl_os_time_sync_new`**（可选）→ **`rs_ctrl_os_discovery_start`**（可传入 time sync 指针）。
+5. **`rs_ctrl_os_pubsub_new(cfg, registry)`** — **接管 registry**：成功后 **禁止**再 `rs_ctrl_os_registry_destroy`；失败则你方 **`registry_destroy`**。
+6. 循环内：**`publish_raw` / `try_recv_raw`**；收到消息时释放 **`str_free` / `payload_free`**。
+7. 退出：**`pubsub_destroy` → `time_sync_destroy` → `config_destroy`**（顺序与创建相反亦可，但不要对已交给 pubsub 的 registry 再 destroy）。
 
-**glibc 说明**：预编译库在 **Ubuntu 22.04 / 24.04** 类 CI 镜像上构建；若你的运行环境 **glibc 更旧**，可能无法链接或运行，请在本机 **`cargo build --release`** 自行编译。
+### `[dynamic]` 与热更新（C 侧要点）
 
-### 链接示例（C）
+- C API **不**解析 TOML 的 `[dynamic]` 字段语义；框架在 **`dynamic_load_enable=true`** 时用 `notify` 监听文件，热重载后 **`get_dynamic_json` 返回的字符串会变**。
+- 典型用法：主循环里 **周期性调用 `get_dynamic_json`**，解析 JSON（本仓库 **`c_examples/tutorial_node.c`** 内含极简 `message_prefix` / `interval_ms` 解析；生产环境建议 **cJSON、jansson** 等）。
+- 修改 TOML 后保存即可触发重载；若 **`dynamic_load_enable=false`**，则只有进程启动时读到的 JSON 有效。
 
-解压后假设当前目录含有 `librs_ctrl_os.a` 与 `include/rs_ctrl_os.h`。`zmq` crate 默认会静态编译 bundled libzmq，其中含 **C++** 目标文件，因此用 **gcc 链 C 主程序时通常需要 `-lstdc++`**：
+### 链接（C 程序）
+
+`librs_ctrl_os.a` 内含 bundled **libzmq 的 C++ 对象**，用 **gcc 链纯 C** 时需显式 **`stdc++`**：
 
 ```bash
-gcc -O2 -o myapp myapp.c \
+gcc -std=c11 -O2 -o myapp myapp.c \
   ./librs_ctrl_os.a \
   -lzmq -lstdc++ -lpthread -ldl -lm
 ```
 
-**CMake + C++11 示例**（推荐）：目录 **`c_examples/`** 含 `CMakeLists.txt` 与 **`minimal.cpp`**。先在仓库根执行 `cargo build --release`，再：
+### 示例工程 `c_examples/`（CMake）
+
+仓库 **`c_examples/`** 提供 **CMake** 工程，默认构建两个可执行文件：
+
+| 目标 | 说明 |
+|------|------|
+| **`rcos_minimal`** | C++11，最短链路（`minimal.cpp`） |
+| **`rcos_tutorial_c`** | **C11**，较完整：`get_dynamic_json`、简易 JSON 字段、`publish_raw`、轮询 `try_recv_raw`、时间戳（`tutorial_node.c`） |
+
+在仓库根先 **`cargo build --release`**，再：
 
 ```bash
 cd c_examples
 cmake -S . -B build -DRCOS_ROOT=.. -DRCOS_LIB=../target/release/librs_ctrl_os.a
 cmake --build build
 ./build/rcos_minimal ../example_config.toml
+./build/rcos_tutorial_c ../example_config.toml 120   # 第二个参数：主循环 tick 次数（默认 600）
 ```
 
-- **`RCOS_ROOT`**：含 `include/rs_ctrl_os.h` 的路径（预编译包解压目录或本仓库根）。
-- **`RCOS_LIB`**：`librs_ctrl_os.a` 的绝对或相对路径；省略时若存在 `RCOS_ROOT/target/release`（或 `debug`）下的静态库会自动选用。
-- 若系统默认 `c++` 为不完整 clang，CMake 会尽量选用 **`g++`**。
+**自测动态配置**：终端 A 运行 `./build/rcos_tutorial_c ../example_config.toml`；终端 B 编辑同一文件里 **`[dynamic]`** 的 `message_prefix` 或 `interval_ms` 并保存；当 `dynamic_load_enable=true` 时，A 的日志/输出会反映新 JSON。
 
-### 从源码构建（Rust 开发者）
+**CMake 变量**：`RCOS_ROOT`（含 `include/`）、`RCOS_LIB`（`.a` 路径）；未设 `RCOS_LIB` 时会尝试 `RCOS_ROOT/target/release` 或 `debug`。Linux 上 CMake 会尽量选 **`gcc`/`g++`**，且对示例目标链接 **`stdc++`**。
+
+### 从源码构建 Rust 库
 
 ```bash
 cargo build --release
-# 静态库路径：target/release/librs_ctrl_os.a
+# 静态库：target/release/librs_ctrl_os.a
 ```
 
-本仓库带有 **`.cargo/config.toml`**，将 **`CXX=g++` / `CC=gcc`** 传给 `zmq-sys` 的 bundled 构建，避免默认 `c++` 指向 **无 libstdc++ 头文件** 的 clang 而导致编译失败。若你环境不同可自行覆盖。
+**`.cargo/config.toml`** 中 **`CXX=g++` / `CC=gcc`** 用于稳定编译 `zmq-sys`；可按本机环境覆盖。
 
-### C API 行为摘要
+### C API 速查
 
-- 配置：`rs_ctrl_os_config_open` 打开完整 TOML；`rs_ctrl_os_config_get_dynamic_json` 返回 **`[dynamic]` 的 JSON**（需 `rs_ctrl_os_str_free`）。
-- 发现：`rs_ctrl_os_discovery_start` 返回 registry；`**rs_ctrl_os_pubsub_new` 会消费（接管）registry**，成功后 **不要**再 `rs_ctrl_os_registry_destroy`；若 `pubsub_new` 失败需自行 `registry_destroy`。
-- 收发：`rs_ctrl_os_pubsub_publish_raw`、`rs_ctrl_os_pubsub_try_recv_raw`；收到消息时对 `sub_topic_out` / `payload_out` 分别 `str_free` / `payload_free`。
-- 错误：多数函数返回 `rcos_err_t`；失败详情见 `rs_ctrl_os_last_error`。
+| 主题 | 函数 |
+|------|------|
+| 日志 | `rs_ctrl_os_init_logging` |
+| 配置 | `config_open` / `config_destroy` / `config_get_dynamic_json` / `config_get_my_id` 等 |
+| 时间 | `time_sync_new` / `now_ms` / `is_synced` / `destroy` |
+| 发现 | `discovery_start` / `registry_destroy`（仅失败或未交给 pubsub 时） |
+| 总线 | `pubsub_new` / `destroy` / `publish_raw` / `try_recv_raw` / `set_sub_topics` / `set_*_hz` |
+| 内存 | `str_free` / `payload_free`；错误串 `last_error` |
 
 ---
 
