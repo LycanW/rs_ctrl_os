@@ -59,8 +59,11 @@ int rs_ctrl_os_time_sync_is_synced(const RcOsTimeSyncHandle *p);
 RcOsConfig *rs_ctrl_os_config_open(const char *path_utf8);
 void rs_ctrl_os_config_destroy(RcOsConfig *p);
 
-/** Allocates JSON string; caller must rs_ctrl_os_str_free(*out_json). */
-rcos_err_t rs_ctrl_os_config_get_dynamic_json(const RcOsConfig *cfg, char **out_json);
+/**
+ * Allocates TOML text for the current `[dynamic]` table (key/value lines only, no section header).
+ * Matches the on-disk format style; use libtoml / tomlc99 / etc. in production. Caller: rs_ctrl_os_str_free.
+ */
+rcos_err_t rs_ctrl_os_config_get_dynamic_toml(const RcOsConfig *cfg, char **out_toml);
 
 char *rs_ctrl_os_config_get_my_id(const RcOsConfig *cfg);
 char *rs_ctrl_os_config_get_host(const RcOsConfig *cfg);

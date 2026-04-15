@@ -33,7 +33,7 @@
 
 1. **`rs_ctrl_os_init_logging()`**（可选，便于看 `tracing` 日志）。
 2. **`rs_ctrl_os_config_open(path)`** — 打开含 `[static_config]` 与 `[dynamic]` 的 TOML；失败时查 `rs_ctrl_os_last_error`。
-3. 用 **`rs_ctrl_os_config_get_*`** 读静态字段；用 **`rs_ctrl_os_config_get_dynamic_json`** 取 **`[dynamic]` 整段 JSON**（每次调用分配新串，用完 **`rs_ctrl_os_str_free`**）。
+3. 用 **`rs_ctrl_os_config_get_*`** 读静态字段；用 **`rs_ctrl_os_config_get_dynamic_toml`** 取 **`[dynamic]` 表对应的 TOML 文本**（与磁盘风格一致，**不含** `[dynamic]` 行；每次调用分配新串，用完 **`rs_ctrl_os_str_free`**）。
 4. **`rs_ctrl_os_time_sync_new`**（可选）→ **`rs_ctrl_os_discovery_start`**（可传入 time sync 指针）。
 5. **`rs_ctrl_os_pubsub_new(cfg, registry)`** — **接管 registry**：成功后 **禁止**再 `rs_ctrl_os_registry_destroy`；失败则你方 **`registry_destroy`**。
 6. 循环内：**`publish_raw` / `try_recv_raw`**；收到消息时释放 **`str_free` / `payload_free`**。
@@ -41,9 +41,9 @@
 
 ### `[dynamic]` 与热更新（C 侧要点）
 
-- C API **不**解析 TOML 的 `[dynamic]` 字段语义；框架在 **`dynamic_load_enable=true`** 时用 `notify` 监听文件，热重载后 **`get_dynamic_json` 返回的字符串会变**。
-- 典型用法：主循环里 **周期性调用 `get_dynamic_json`**，解析 JSON（本仓库 **`c_examples/tutorial_node.c`** 内含极简 `message_prefix` / `interval_ms` 解析；生产环境建议 **cJSON、jansson** 等）。
-- 修改 TOML 后保存即可触发重载；若 **`dynamic_load_enable=false`**，则只有进程启动时读到的 JSON 有效。
+- C API **不**解析 `[dynamic]` 的字段语义；框架在 **`dynamic_load_enable=true`** 时用 `notify` 监听文件，热重载后 **`get_dynamic_toml` 返回的字符串会变**。
+- 典型用法：主循环里 **周期性调用 `get_dynamic_toml`**，用 **TOML 解析库**（如 **tomlc99、libtoml**）或手写解析（`tutorial_node.c` 为极简行解析示例）。这样与 **磁盘上的 `[dynamic]`** 表示一致，无需在 C 侧再学一套 JSON 形态。
+- 修改 TOML 后保存即可触发重载；若 **`dynamic_load_enable=false`**，则只有进程启动时读到的内容有效。
 
 ### 链接（C 程序）
 
@@ -62,7 +62,7 @@ gcc -std=c11 -O2 -o myapp myapp.c \
 | 目标 | 说明 |
 |------|------|
 | **`rcos_minimal`** | C++11，最短链路（`minimal.cpp`） |
-| **`rcos_tutorial_c`** | **C11**，较完整：`get_dynamic_json`、简易 JSON 字段、`publish_raw`、轮询 `try_recv_raw`、时间戳（`tutorial_node.c`） |
+| **`rcos_tutorial_c`** | **C11**，较完整：`get_dynamic_toml`、简易 TOML 行解析、`publish_raw`、轮询 `try_recv_raw`、时间戳（`tutorial_node.c`） |
 
 在仓库根先 **`cargo build --release`**，再：
 
@@ -74,7 +74,7 @@ cmake --build build
 ./build/rcos_tutorial_c ../example_config.toml 120   # 第二个参数：主循环 tick 次数（默认 600）
 ```
 
-**自测动态配置**：终端 A 运行 `./build/rcos_tutorial_c ../example_config.toml`；终端 B 编辑同一文件里 **`[dynamic]`** 的 `message_prefix` 或 `interval_ms` 并保存；当 `dynamic_load_enable=true` 时，A 的日志/输出会反映新 JSON。
+**自测动态配置**：终端 A 运行 `./build/rcos_tutorial_c ../example_config.toml`；终端 B 编辑同一文件里 **`[dynamic]`** 的 `message_prefix` 或 `interval_ms` 并保存；当 `dynamic_load_enable=true` 时，A 的日志/输出会反映新的 TOML 片段。
 
 **CMake 变量**：`RCOS_ROOT`（含 `include/`）、`RCOS_LIB`（`.a` 路径）；未设 `RCOS_LIB` 时会尝试 `RCOS_ROOT/target/release` 或 `debug`。Linux 上 CMake 会尽量选 **`gcc`/`g++`**，且对示例目标链接 **`stdc++`**。
 
@@ -92,7 +92,7 @@ cargo build --release
 | 主题 | 函数 |
 |------|------|
 | 日志 | `rs_ctrl_os_init_logging` |
-| 配置 | `config_open` / `config_destroy` / `config_get_dynamic_json` / `config_get_my_id` 等 |
+| 配置 | `config_open` / `config_destroy` / `config_get_dynamic_toml` / `config_get_my_id` 等 |
 | 时间 | `time_sync_new` / `now_ms` / `is_synced` / `destroy` |
 | 发现 | `discovery_start` / `registry_destroy`（仅失败或未交给 pubsub 时） |
 | 总线 | `pubsub_new` / `destroy` / `publish_raw` / `try_recv_raw` / `set_sub_topics` / `set_*_hz` |

@@ -8,7 +8,7 @@
  * Run:
  *   ./build/rcos_minimal /path/to/config.toml
  *
- * 更完整的 C 示例（动态 JSON、publish 循环）见同目录 **tutorial_node.c**（目标 **rcos_tutorial_c**）。
+ * 更完整的 C 示例（动态 TOML、`get_dynamic_toml`、publish 循环）见 **tutorial_node.c**（**rcos_tutorial_c**）。
  */
 #include <cstdint>
 #include <iostream>
@@ -82,8 +82,8 @@ int main(int argc, char **argv) {
     }
 
     char *dj = NULL;
-    if (rs_ctrl_os_config_get_dynamic_json(cfg, &dj) == RCOS_OK && dj) {
-        std::cout << "dynamic json: " << dj << "\n";
+    if (rs_ctrl_os_config_get_dynamic_toml(cfg, &dj) == RCOS_OK && dj) {
+        std::cout << "dynamic toml:\n" << dj << "\n";
         rs_ctrl_os_str_free(dj);
     }
 

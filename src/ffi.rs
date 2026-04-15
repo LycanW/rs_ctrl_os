@@ -233,26 +233,28 @@ pub unsafe extern "C" fn rs_ctrl_os_config_destroy(p: *mut RcOsConfig) {
     }
 }
 
+/// Returns the current `[dynamic]` table as **TOML text** (same style as in the config file,
+/// without a `[dynamic]` header line — only the key/value lines). Caller must `rs_ctrl_os_str_free`.
 #[no_mangle]
-pub unsafe extern "C" fn rs_ctrl_os_config_get_dynamic_json(
+pub unsafe extern "C" fn rs_ctrl_os_config_get_dynamic_toml(
     cfg: *const RcOsConfig,
-    out_json: *mut *mut c_char,
+    out_toml: *mut *mut c_char,
 ) -> c_int {
-    if cfg.is_null() || out_json.is_null() {
+    if cfg.is_null() || out_toml.is_null() {
         return RCOS_ERR_INVALID;
     }
     clear_last_error();
     match catch_unwind(AssertUnwindSafe(|| {
         let v = (*cfg).get_dynamic_clone();
-        let s = serde_json::to_string(&v).map_err(|e| RsCtrlError::Serialization(e.to_string()))?;
-        let c = CString::new(s).map_err(|_| RsCtrlError::Serialization("NUL in JSON".into()))?;
-        *out_json = c.into_raw();
+        let s = toml::to_string(&v).map_err(|e| RsCtrlError::Serialization(e.to_string()))?;
+        let c = CString::new(s).map_err(|_| RsCtrlError::Serialization("NUL in TOML".into()))?;
+        *out_toml = c.into_raw();
         Ok::<(), RsCtrlError>(())
     })) {
         Ok(Ok(())) => RCOS_OK,
         Ok(Err(e)) => map_err(e),
         Err(_) => {
-            set_last_error("panic in rs_ctrl_os_config_get_dynamic_json");
+            set_last_error("panic in rs_ctrl_os_config_get_dynamic_toml");
             RCOS_ERR_INTERNAL
         }
     }
