@@ -10,7 +10,7 @@ endif()
 
 project(rcos_minimal LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -34,7 +34,7 @@ if(NOT RCOS_LIB OR NOT EXISTS "${RCOS_LIB}")
 endif()
 
 add_executable(rcos_minimal minimal.cpp)
-target_compile_features(rcos_minimal PRIVATE cxx_std_23)
+target_compile_features(rcos_minimal PRIVATE cxx_std_11)
 target_include_directories(rcos_minimal PRIVATE "${RCOS_ROOT}/include")
 
 find_package(PkgConfig QUIET)

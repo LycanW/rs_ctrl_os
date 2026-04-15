@@ -1,5 +1,5 @@
 /**
- * Minimal C++23 client using rs_ctrl_os C API via CMake.
+ * Minimal C++11 client using rs_ctrl_os C API via CMake.
  *
  * Configure (from c_examples/, default RCOS_ROOT is parent repo):
  *   cmake -S . -B build -DRCOS_ROOT=.. -DRCOS_LIB=../target/release/librs_ctrl_os.a
@@ -9,26 +9,24 @@
  *   ./build/rcos_minimal /path/to/config.toml
  */
 #include <cstdint>
-#include <format>
 #include <iostream>
-#include <string>
-#include <string_view>
 
 #include "rs_ctrl_os.h"
 
 namespace {
 
-void print_last_error(std::string_view label) {
-    char buf[512]{};
+void print_last_error(const char *label) {
+    char buf[512];
+    buf[0] = '\0';
     (void)rs_ctrl_os_last_error(buf, sizeof(buf));
-    std::cerr << std::format("{}: {}\n", label, buf);
+    std::cerr << label << ": " << buf << "\n";
 }
 
 }  // namespace
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        std::cerr << std::format("usage: {} <config.toml>\n", argv[0]);
+        std::cerr << "usage: " << argv[0] << " <config.toml>\n";
         return 1;
     }
 
@@ -81,23 +79,24 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    char *dj = nullptr;
+    char *dj = NULL;
     if (rs_ctrl_os_config_get_dynamic_json(cfg, &dj) == RCOS_OK && dj) {
-        std::cout << std::format("dynamic json: {}\n", static_cast<const char *>(dj));
+        std::cout << "dynamic json: " << dj << "\n";
         rs_ctrl_os_str_free(dj);
     }
 
-    constexpr std::string_view payload{"hi"};
+    const char payload[] = "hi";
+    const std::size_t payload_len = sizeof(payload) - 1;
     (void)rs_ctrl_os_pubsub_publish_raw(
         bus,
         "control",
         "c_hello",
-        reinterpret_cast<const std::uint8_t *>(payload.data()),
-        payload.size());
+        reinterpret_cast<const std::uint8_t *>(payload),
+        payload_len);
 
     for (int i = 0; i < 5; ++i) {
-        char *st = nullptr;
-        std::uint8_t *pl = nullptr;
+        char *st = NULL;
+        std::uint8_t *pl = NULL;
         std::size_t plen = 0;
         int got = 0;
         rcos_err_t r =
@@ -106,9 +105,8 @@ int main(int argc, char **argv) {
             print_last_error("try_recv_raw");
             break;
         }
-        if (got != 0 && st != nullptr) {
-            std::cout << std::format(
-                "recv sub_topic={} len={}\n", static_cast<const char *>(st), plen);
+        if (got != 0 && st != NULL) {
+            std::cout << "recv sub_topic=" << st << " len=" << plen << "\n";
             rs_ctrl_os_str_free(st);
             rs_ctrl_os_payload_free(pl, plen);
         }

@@ -47,7 +47,7 @@ gcc -O2 -o myapp myapp.c \
   -lzmq -lstdc++ -lpthread -ldl -lm
 ```
 
-**CMake + C++23 示例**（推荐）：目录 **`c_examples/`** 含 `CMakeLists.txt` 与 **`minimal.cpp`**（C++23，使用 `std::format`）。先在仓库根执行 `cargo build --release`，再：
+**CMake + C++11 示例**（推荐）：目录 **`c_examples/`** 含 `CMakeLists.txt` 与 **`minimal.cpp`**。先在仓库根执行 `cargo build --release`，再：
 
 ```bash
 cd c_examples
