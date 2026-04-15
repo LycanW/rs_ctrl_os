@@ -9,9 +9,9 @@ use tracing::{info, warn};
 
 /// 从 TOML 文件加载 rs_ctrl_os 必须的配置。
 /// 返回 `(static_config, dynamic)`：框架静态配置 + 原始 dynamic 节（供用户按需反序列化）。
-/// 
+///
 /// TOML 必须包含 `[static_config]`；`[dynamic]` 可选，缺失时返回空表。
-/// 
+///
 /// # 示例
 /// ```ignore
 /// // 仅需 static_config
@@ -23,8 +23,8 @@ use tracing::{info, warn};
 /// ```
 pub fn load_config_rcos(path: impl AsRef<Path>) -> Result<(StaticBase, toml::Value)> {
     let path = path.as_ref();
-    let content = fs::read_to_string(path)
-        .map_err(|e| RsCtrlError::Config(format!("Read failed: {}", e)))?;
+    let content =
+        fs::read_to_string(path).map_err(|e| RsCtrlError::Config(format!("Read failed: {}", e)))?;
 
     let val: toml::Value = toml::from_str(&content)
         .map_err(|e| RsCtrlError::Config(format!("Parse failed: {}", e)))?;
@@ -33,8 +33,7 @@ pub fn load_config_rcos(path: impl AsRef<Path>) -> Result<(StaticBase, toml::Val
         .get("static_config")
         .ok_or_else(|| RsCtrlError::Config("Missing [static_config]".into()))?;
     let static_cfg: StaticBase = toml::from_str(
-        &toml::to_string(static_val)
-            .map_err(|e| RsCtrlError::Config(e.to_string()))?,
+        &toml::to_string(static_val).map_err(|e| RsCtrlError::Config(e.to_string()))?,
     )
     .map_err(|e| RsCtrlError::Config(format!("static_config parse failed: {}", e)))?;
 
@@ -58,10 +57,9 @@ where
     D: for<'de> Deserialize<'de>,
 {
     let (static_cfg, dyn_val) = load_config_rcos(path)?;
-    let dynamic: D = toml::from_str(
-        &toml::to_string(&dyn_val).map_err(|e| RsCtrlError::Config(e.to_string()))?,
-    )
-    .map_err(|e| RsCtrlError::Config(format!("dynamic parse failed: {}", e)))?;
+    let dynamic: D =
+        toml::from_str(&toml::to_string(&dyn_val).map_err(|e| RsCtrlError::Config(e.to_string()))?)
+            .map_err(|e| RsCtrlError::Config(format!("dynamic parse failed: {}", e)))?;
     Ok((static_cfg, dynamic))
 }
 
@@ -83,7 +81,7 @@ pub struct StaticBase {
     #[serde(default)]
     pub static_nodes: HashMap<String, String>,
     #[serde(default)]
-    pub publishers: HashMap<String, String>, 
+    pub publishers: HashMap<String, String>,
     /// 发布频率（Hz），节点级上限：
     /// - >0: 所有 topic 的 publish_topic 默认按该频率限速
     /// - =0: 动态频率（有多少发多快）
@@ -138,7 +136,11 @@ where
                 move |res: notify::Result<notify::Event>| {
                     if let Ok(event) = res {
                         if let Some(ref name) = target_name {
-                            if event.paths.iter().any(|p| p.file_name() == Some(name.as_ref())) {
+                            if event
+                                .paths
+                                .iter()
+                                .any(|p| p.file_name() == Some(name.as_ref()))
+                            {
                                 Self::reload_dynamic(&path_clone, &dyn_clone);
                             }
                         }
@@ -188,12 +190,16 @@ where
         warn!("⚠️ Dynamic config reload failed.");
     }
 
-    pub fn static_cfg(&self) -> &StaticBase { &self.static_cfg }
+    pub fn static_cfg(&self) -> &StaticBase {
+        &self.static_cfg
+    }
     pub fn get_dynamic_clone(&self) -> D {
         self.dynamic_data
             .read()
             .map(|g| g.clone())
             .unwrap_or_else(|e| e.into_inner().clone())
     }
-    pub fn config_path(&self) -> &Path { &self.config_path }
+    pub fn config_path(&self) -> &Path {
+        &self.config_path
+    }
 }

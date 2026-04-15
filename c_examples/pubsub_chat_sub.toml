@@ -1,0 +1,17 @@
+# 订阅端：本地订阅名 recv0，连接到节点 chat_pub；无多播时用 static_nodes 直连
+[static_config]
+my_id = "chat_sub"
+host = "127.0.0.1"
+port = 5571
+is_master = false
+publish_hz = 0
+subscribe_hz = 0
+dynamic_load_enable = false
+
+[static_config.subscribers]
+recv0 = "chat_pub"
+
+[static_config.static_nodes]
+chat_pub = "127.0.0.1:5570"
+
+[dynamic]

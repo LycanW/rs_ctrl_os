@@ -10,6 +10,104 @@
 
 适合需要在局域网内跑多进程/多节点，进行“互相发现 + 消息分发 + 动态配置”的系统。
 
+## 目录
+
+- [快速上手（Rust）](#快速上手rust)
+- [C / C++ API（预编译静态库）](#c--c-api预编译静态库)
+- [示例](#示例)
+  - [Rust examples/](#rust-examples)
+  - [C 示例工程 c_examples/（CMake）](#c-示例工程-c_examplescmake)
+- [框架能力与边界](#框架能力与边界)
+- [API 参考（详细）](#api-参考详细)
+- [许可证](#许可证)
+
+---
+
+## 快速上手（Rust）
+
+### 0. 准备环境
+
+- 安装 ZeroMQ 库（不同平台命令略有差异，以下是常见示例）：
+  - Debian/Ubuntu: `sudo apt-get install libzmq3-dev`
+  - Fedora: `sudo dnf install zeromq zeromq-devel`
+  - macOS（Homebrew）: `brew install zeromq`
+- 安装 Rust 稳定版（建议用 `rustup`）。
+
+### 1. 安装 crate
+
+在你的 `Cargo.toml` 中添加依赖：
+
+```toml
+[dependencies]
+rs_ctrl_os = "0.5.0"
+```
+
+或：
+
+```bash
+cargo add rs_ctrl_os
+```
+
+### 2. 跑一个最简单的 pub/sub 示例
+
+准备一个最小的配置（也可以直接用仓库里的 `example_config.toml`）：
+
+```toml
+[static_config]
+my_id = "node1"
+host = "127.0.0.1"
+port = 5555
+is_master = true
+publish_hz = 1000
+subscribe_hz = 1000
+dynamic_load_enable = true
+
+[static_config.subscribers]
+local_sub = "node1"
+
+[static_config.publishers]
+control = "self"
+
+# 可选：当 discovery 未找到目标时，用此地址直连（适合无多播环境）
+[static_config.static_nodes]
+# node1 = "127.0.0.1:5555"
+
+[dynamic]
+message_prefix = "hello"
+interval_ms = 200
+```
+
+在项目根目录运行：
+
+```bash
+cargo run --example pub_node -- example_config.toml
+```
+
+如果你改动配置文件里的 `[dynamic]`（比如改前缀、改间隔）并保存，进程会自动加载新的动态配置：
+
+- `message_prefix` 会改变打印出来的文本前缀；
+- `interval_ms` 会改变发送/接收的频率。
+
+### 3. 跑两个进程：一个 pub，一个 sub
+
+仓库自带：
+
+- `examples/pub_node.rs`
+- `examples/sub_node.rs`
+- `pub_config.toml`、`sub_config.toml`
+
+先开一个终端作为发布端：
+
+```bash
+cargo run --example pub_node -- pub_config.toml
+```
+
+再开另一个终端作为订阅端：
+
+```bash
+cargo run --example sub_node -- sub_config.toml
+```
+
 ---
 
 ## C / C++ API（预编译静态库）
@@ -35,7 +133,7 @@
 2. **`rs_ctrl_os_config_open(path)`** — 打开含 `[static_config]` 与 `[dynamic]` 的 TOML；失败时查 `rs_ctrl_os_last_error`。
 3. 用 **`rs_ctrl_os_config_get_*`** 读静态字段；用 **`rs_ctrl_os_config_get_dynamic_toml`** 取 **`[dynamic]` 表对应的 TOML 文本**（与磁盘风格一致，**不含** `[dynamic]` 行；每次调用分配新串，用完 **`rs_ctrl_os_str_free`**）。
 4. **`rs_ctrl_os_time_sync_new`**（可选）→ **`rs_ctrl_os_discovery_start`**（可传入 time sync 指针）。
-5. **`rs_ctrl_os_pubsub_new(cfg, registry)`** — **接管 registry**：成功后 **禁止**再 `rs_ctrl_os_registry_destroy`；失败则你方 **`registry_destroy`**。
+5. **`rs_ctrl_os_pubsub_new(cfg, registry)`** — **一调用就接管 `registry` 所有权**（内部 `Box::from_raw`）：无论成功或失败，**都不要再**对原 `registry` 指针调用 **`rs_ctrl_os_registry_destroy`**；失败时该指针已无效，需重新 **`discovery_start`** 再试。
 6. 循环内：**`publish_raw` / `try_recv_raw`**；收到消息时释放 **`str_free` / `payload_free`**。
 7. 退出：**`pubsub_destroy` → `time_sync_destroy` → `config_destroy`**（顺序与创建相反亦可，但不要对已交给 pubsub 的 registry 再 destroy）。
 
@@ -73,6 +171,7 @@ gcc -std=c11 -O2 -o myapp myapp.c \
 |------|------|
 | **`rcos_minimal`** | C++11，最短链路（`minimal.cpp`） |
 | **`rcos_tutorial_c`** | **C11**，较完整：`get_dynamic_toml`、简易 TOML 行解析、`publish_raw`、轮询 `try_recv_raw`、时间戳（`tutorial_node.c`） |
+| **`rcos_pubsub_chat`** | **C11**，双进程收发：`pubsub_chat.c`（`pub`/`sub` 两种模式），配套 `pubsub_chat_*.toml` |
 
 在仓库根先 **`cargo build --release`**，再：
 
@@ -107,6 +206,48 @@ cargo build --release
 | 发现 | `discovery_start` / `registry_destroy`（仅失败或未交给 pubsub 时） |
 | 总线 | `pubsub_new` / `destroy` / `publish_raw` / `try_recv_raw` / `set_sub_topics` / `set_*_hz` |
 | 内存 | `str_free` / `payload_free`；错误串 `last_error` |
+
+---
+
+## 示例
+
+### Rust examples/
+
+- `examples/pub_node.rs` / `examples/sub_node.rs`：单 pub + 单 sub，pub 使用 `ConfigManager` 热重载，sub 使用 `load_config_typed` 一次性加载。
+- `examples/multi_pub_node.rs` / `examples/multi_sub_node.rs`：多子话题 pub/sub，`multi_sub_node` 使用 `set_sub_topics` 过滤子话题；两者均通过 `try_recv_raw` 接收原始 payload 并自行反序列化。
+
+实际项目参考：
+
+- **[can_bridge](https://github.com/LycanW/can_bridge)**：CAN 总线网关，将 Linux SocketCAN 与 ZeroMQ 打通，实现 CAN ↔ 分布式消息的双向桥接。基于 rs_ctrl_os 构建，典型用法包括 `ConfigManager` 热重载、`start_discovery` + `PubSubManager` 收发、以及用 `publish_topic` / `publish_raw` 传输不同 payload。
+
+运行示例（在项目根目录）：
+
+```bash
+# 简单 pub/sub
+cargo run --example pub_node -- example_config.toml
+
+# 多 pub / 多 sub
+cargo run --example multi_pub_node -- multi_pub_config.toml
+cargo run --example multi_sub_node -- multi_sub_config.toml
+```
+
+### C 示例工程 c_examples/（CMake）
+
+```bash
+cargo build --release
+cmake -S c_examples -B c_examples/build -DCMAKE_BUILD_TYPE=Release
+cmake --build c_examples/build
+```
+
+其中 `rcos_pubsub_chat` 可以用两进程验证收发：
+
+```bash
+# 终端 1
+./c_examples/build/rcos_pubsub_chat pub c_examples/pubsub_chat_pub.toml 500
+
+# 终端 2
+./c_examples/build/rcos_pubsub_chat sub c_examples/pubsub_chat_sub.toml
+```
 
 ---
 
@@ -157,123 +298,7 @@ cargo build --release
 
 ---
 
-## 使用教程（一步一步）
-
-### 0. 准备环境
-
-- 安装 ZeroMQ 库（不同平台命令略有差异，以下是常见示例）：
-  - Debian/Ubuntu: `sudo apt-get install libzmq3-dev`
-  - Fedora: `sudo dnf install zeromq zeromq-devel`
-  - macOS（Homebrew）: `brew install zeromq`
-- 安装 Rust 稳定版（建议用 `rustup`）。
-
-克隆本项目：
-
-```bash
-git clone https://github.com/LycanW/rs_ctrl_os.git
-cd rs_ctrl_os
-```
-
-或者使用 cargo 添加依赖：
-
-```bash
-cargo add rs_ctrl_os
-```
-
-### 1. 跑一个最简单的 pub/sub 示例
-
-准备一个最小的配置（你也可以用仓库里的 `example_config.toml`）：
-
-```toml
-[static_config]
-my_id = "node1"
-host = "127.0.0.1"
-port = 5555
-is_master = true
-publish_hz = 1000
-subscribe_hz = 1000
-dynamic_load_enable = true
-
-[static_config.subscribers]
-local_sub = "node1"
-
-[static_config.publishers]
-control = "self"
-
-# 可选：当 discovery 未找到目标时，用此地址直连（适合无多播环境）
-[static_config.static_nodes]
-# node1 = "127.0.0.1:5555"
-
-[dynamic]
-message_prefix = "hello"
-interval_ms = 200
-```
-
-在项目根目录运行：
-
-```bash
-cargo run --example pub_node -- example_config.toml
-```
-
-`pub_node` 会持续往 `control` topic 发布消息。**注意**：当前 `pub_node` 示例仅发布、不订阅，因此不会打印收到的消息。若需同时收发，可参考 `examples/` 自行扩展，或运行两个进程（见下文）。
-
-如果你改动配置文件里的 `[dynamic]`（比如改前缀、改间隔）并保存，进程会自动加载新的动态配置：
-
-- `message_prefix` 会改变打印出来的文本前缀；
-- `interval_ms` 会改变发送/接收的频率。
-
-### 2. 跑两个进程：一个 pub，一个 sub
-
-有时候你想在两个不同的进程里测试 pub/sub。可以用仓库里的：
-
-- `examples/pub_node.rs`
-- `examples/sub_node.rs`
-
-以及对应的 `pub_config.toml`、`sub_config.toml`。
-
-**配置说明**：`sub_config.toml` 中 `local_sub` 指向的 `target_node_id` 需与 `pub_node` 的 `my_id` 一致，才能收到 pub 的消息。仓库中的 `sub_config.toml` 可能指向其他节点（如 `gateway_node_01`），用于不同场景。若要 pub/sub 互通，可将 `[static_config.subscribers]` 改为 `local_sub = "pub_node"`，并配置 `static_nodes` 或依赖 discovery 解析地址。
-
-先打开一个终端作为发布端：
-
-```bash
-cargo run --example pub_node -- pub_config.toml
-```
-
-再打开另一个终端作为订阅端：
-
-```bash
-cargo run --example sub_node -- sub_config.toml
-```
-
-此时：
-
-- `pub_node` 会按照 `pub_config.toml` 的 `[dynamic]` 配置，持续往 ZeroMQ PUB socket 上发消息。
-- `sub_node` 通过 discovery 或 `static_nodes` 连接 `pub_node`，从 `local_sub` 收消息并打印。
-
-你可以动态修改 `pub_config.toml` 的 `[dynamic]`，比如：
-
-```toml
-[dynamic]
-message_prefix = "pub1"
-interval_ms = 200
-```
-
-改成：
-
-```toml
-[dynamic]
-message_prefix = "PUB-UPDATED"
-interval_ms = 1000
-```
-
-保存之后，几百毫秒到一两秒内你会看到：
-
-- `sub_node` 打印出的消息前缀从 `pub1` 变成 `PUB-UPDATED`；
-- 输出频率从 200ms 一条变成大约 1 秒一条。
-
----
-
-## API 参考
+## API 参考（详细）
 
 ### 1. 初始化
 
@@ -477,20 +502,7 @@ use rs_ctrl_os::{Result, RsCtrlError};
 
 ---
 
-## 安装
-
-在你的 `Cargo.toml` 中添加依赖：
-
-```toml
-[dependencies]
-rs_ctrl_os = "0.5.0"
-```
-
-或者也可以
-
-```bash
-cargo add rs_ctrl_os
-```
+### （附）路径依赖 / git 依赖
 
 你也可以通过路径依赖 / git 依赖方式在本地使用：
 
@@ -498,194 +510,6 @@ cargo add rs_ctrl_os
 [dependencies]
 rs_ctrl_os = { path = "./rs_ctrl_os" }
 ```
-
----
-
-## 快速上手
-
-下面是一个简单的单进程 pub/sub 示例，展示主要 API 的使用方式。
-
-### 1. 初始化日志
-
-```rust
-use rs_ctrl_os::init_logging;
-
-fn main() {
-    init_logging();
-    // ...
-}
-```
-
-### 2. 从 TOML 加载配置（静态 + 动态）
-
-```toml
-# example_config.toml
-[static_config]
-my_id = "node1"
-host = "127.0.0.1"
-port = 5555
-is_master = true
-publish_hz = 1000
-subscribe_hz = 1000
-dynamic_load_enable = true
-
-[static_config.subscribers]
-local_sub = "node1"
-
-[static_config.publishers]
-control = "self"
-
-[dynamic]
-message_prefix = "hello"
-```
-
-**方式一：需要热重载时，用 ConfigManager**
-
-```rust
-use std::path::Path;
-use serde::Deserialize;
-use rs_ctrl_os::ConfigManager;
-
-#[derive(Clone, Deserialize)]
-struct DynamicCfg {
-    message_prefix: String,
-    interval_ms: u64,
-}
-
-fn main() -> rs_ctrl_os::Result<()> {
-    rs_ctrl_os::init_logging();
-
-    let manager: ConfigManager<DynamicCfg> =
-        ConfigManager::new(Path::new("example_config.toml"))?;
-    let static_cfg = manager.static_cfg().clone();
-
-    // 通过 manager.get_dynamic_clone() 获取最新 dynamic（文件变化时自动更新）
-    Ok(())
-}
-```
-
-**方式二：不需要热重载时，用 load_config_typed**
-
-```rust
-use serde::Deserialize;
-use rs_ctrl_os::load_config_typed;
-
-#[derive(Clone, Deserialize)]
-struct DynamicCfg {
-    message_prefix: String,
-}
-
-fn main() -> rs_ctrl_os::Result<()> {
-    rs_ctrl_os::init_logging();
-
-    let (static_cfg, dynamic) = load_config_typed::<DynamicCfg>("example_config.toml")?;
-    // 一次性加载，无 watcher 开销
-    Ok(())
-}
-```
-
-### 3. 启动节点发现 + 时间同步
-
-```rust
-use std::sync::Arc;
-use rs_ctrl_os::{start_discovery, TimeSynchronizer};
-
-fn main() -> rs_ctrl_os::Result<()> {
-    init_logging();
-    // ... 加载配置
-
-    let time_sync = Arc::new(TimeSynchronizer::new());
-
-    let registry = start_discovery(
-        &static_cfg.my_id,
-        &static_cfg.host,
-        static_cfg.port,
-        static_cfg.is_master,
-        Some(time_sync.clone()),
-    )?;
-
-    // registry 会在后台线程持续更新
-    Ok(())
-}
-```
-
-### 4. 创建 Pub/Sub 管理器并发送消息
-
-以下片段需与步骤 1（**方式一** ConfigManager）、步骤 3 组合使用，才能获得 `manager`、`static_cfg`、`registry`、`time_sync`。
-
-```rust
-use rs_ctrl_os::PubSubManager;
-use std::thread;
-use std::time::Duration;
-
-fn main() -> rs_ctrl_os::Result<()> {
-    init_logging();
-    // ... 步骤 1（ConfigManager）+ 步骤 3（start_discovery），得到 manager, static_cfg, registry, time_sync
-
-    let mut bus = PubSubManager::new(&static_cfg, registry)?;
-
-    loop {
-        let dyn_cfg = manager.get_dynamic_clone();
-        let ts_ms = time_sync.now_corrected_ms();
-
-        let payload = format!(
-            "{} from {} at {} ms",
-            dyn_cfg.message_prefix, static_cfg.my_id, ts_ms
-        );
-
-        // topic_key = "control"，sub_topic = "demo"（bincode 序列化）
-        bus.publish_topic("control", "demo", &payload)?;
-
-        // 图像/点云等二进制可用 publish_raw 透传，无需 bincode
-        // bus.publish_raw("camera", "frame", &jpeg_bytes)?;
-
-        if let Some(received) = bus.try_recv_specific::<String>("local_sub", "demo")? {
-            println!("Received: {received}");
-        }
-
-        // 简单示例：按 subscribe_hz 驱动主循环节奏
-        let interval = if static_cfg.subscribe_hz > 0 {
-            Duration::from_secs_f64(1.0 / static_cfg.subscribe_hz as f64)
-        } else {
-            Duration::from_millis(100)
-        };
-        thread::sleep(interval);
-    }
-}
-```
-
----
-
-## 示例（examples）
-
-### 内置示例
-
-- `examples/pub_node.rs` / `examples/sub_node.rs`：单 pub + 单 sub，pub 使用 `ConfigManager` 热重载，sub 使用 `load_config_typed` 一次性加载。
-- `examples/multi_pub_node.rs` / `examples/multi_sub_node.rs`：多子话题 pub/sub，`multi_sub_node` 使用 `set_sub_topics` 过滤子话题；两者均通过 `try_recv_raw` 接收原始 payload 并自行反序列化。
-
-### 实际项目示例
-
-**[can_bridge](https://github.com/LycanW/can_bridge)**：CAN 总线网关，将 Linux SocketCAN 与 ZeroMQ 打通，实现 CAN ↔ 分布式消息的双向桥接。基于 rs_ctrl_os 构建，典型用法包括：
-
-- 使用 `ConfigManager` 加载配置并热重载 `[dynamic]`（接口、设备、控制开关等）
-- `start_discovery` + `PubSubManager` 实现传感器数据发布（`sensor_mit` / `sensor_dji` / `sensor_imu`）与控制指令订阅（`ctrl_mit` / `ctrl_dji`）
-- `publish_topic` 发布解析后的传感器 JSON，`try_recv_raw` 接收控制命令
-- `[static_config]` 完全遵循 rs_ctrl_os 规范
-
-可作为将 rs_ctrl_os 应用于机器人/嵌入式桥接场景的参考。
-
-运行示例（在项目根目录）：
-
-```bash
-# 简单 pub/sub
-cargo run --example pub_node -- example_config.toml
-
-# 多 pub / 多 sub
-cargo run --example multi_pub_node -- multi_pub_config.toml
-cargo run --example multi_sub_node -- multi_sub_config.toml
-```
-
----
 
 ## 错误处理
 

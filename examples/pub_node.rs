@@ -6,12 +6,7 @@ use std::time::Duration;
 use serde::Deserialize;
 
 use rs_ctrl_os::{
-    config::ConfigManager,
-    init_logging,
-    start_discovery,
-    PubSubManager,
-    TimeSynchronizer,
-    Result,
+    config::ConfigManager, init_logging, start_discovery, PubSubManager, Result, TimeSynchronizer,
 };
 
 #[derive(Clone, Deserialize)]
@@ -61,4 +56,3 @@ fn main() -> Result<()> {
         thread::sleep(Duration::from_millis(dyn_cfg.interval_ms));
     }
 }
-

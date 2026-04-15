@@ -1,3 +1,6 @@
 /target
 /c_examples/build
+/dist
 LICENSE-MIT
+/scripts
+/.vscode

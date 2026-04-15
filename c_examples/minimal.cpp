@@ -75,7 +75,6 @@ int main(int argc, char **argv) {
     RcOsPubSub *bus = rs_ctrl_os_pubsub_new(cfg, reg);
     if (!bus) {
         print_last_error("pubsub_new");
-        rs_ctrl_os_registry_destroy(reg);
         rs_ctrl_os_time_sync_destroy(ts);
         rs_ctrl_os_config_destroy(cfg);
         return 1;

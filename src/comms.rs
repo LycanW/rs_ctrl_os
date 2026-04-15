@@ -1,12 +1,12 @@
+use crate::config::StaticBase;
 use crate::discovery::ServiceRegistry;
 use crate::error::{Result, RsCtrlError};
-use crate::config::StaticBase;
 use bincode;
+use once_cell::sync::Lazy;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
+use tracing::{debug, info, warn};
 use zmq::{Context, Socket};
-use tracing::{info, warn, debug};
-use once_cell::sync::Lazy;
 
 static ZMQ_CONTEXT: Lazy<Context> = Lazy::new(|| Context::new());
 
@@ -49,7 +49,7 @@ pub struct PubSubManager {
     // 频率控制（节点级别）
     publish_hz: i64,
     subscribe_hz: i64,
-    last_publish: HashMap<String, Instant>,   // 按 topic_key 跟踪
+    last_publish: HashMap<String, Instant>, // 按 topic_key 跟踪
     last_sub_poll: HashMap<String, Instant>, // 按 local_name 跟踪
 }
 
@@ -59,7 +59,9 @@ impl PubSubManager {
         let mut subs = HashMap::new();
         let mut pending_subs = HashMap::new();
 
-        let self_topics: HashSet<String> = static_cfg.publishers.iter()
+        let self_topics: HashSet<String> = static_cfg
+            .publishers
+            .iter()
             .filter(|(_, t)| *t == "self")
             .map(|(k, _)| k.clone())
             .collect();
@@ -81,9 +83,11 @@ impl PubSubManager {
             .collect();
 
         for (local_name, target_node_id) in &static_cfg.subscribers {
-            let addr = registry
-                .get_address(target_node_id)
-                .or_else(|| static_nodes.get(target_node_id).map(|(h, p)| (h.clone(), *p)));
+            let addr = registry.get_address(target_node_id).or_else(|| {
+                static_nodes
+                    .get(target_node_id)
+                    .map(|(h, p)| (h.clone(), *p))
+            });
             if let Some((host, port)) = addr {
                 Self::connect_sub(&mut subs, local_name, target_node_id, &host, port)?;
             } else {
@@ -119,13 +123,22 @@ impl PubSubManager {
         let endpoint = format!("tcp://{}:{}", host, port);
         socket.connect(&endpoint)?;
         socket.set_subscribe(b"")?; // Subscribe all, filter by app logic
-        socket.set_rcvtimeo(100)?; 
-        socket.set_reconnect_ivl(100)?; 
-        socket.set_reconnect_ivl_max(5000)?; 
+        socket.set_rcvtimeo(100)?;
+        socket.set_reconnect_ivl(100)?;
+        socket.set_reconnect_ivl_max(5000)?;
         socket.set_rcvhwm(1000)?;
 
-        info!("🔗 [SUB] '{}' connected to {} (Target: {})", local_name, endpoint, target_id);
-        subs.insert(local_name.to_string(), SubSocket { socket, topics: HashSet::new() });
+        info!(
+            "🔗 [SUB] '{}' connected to {} (Target: {})",
+            local_name, endpoint, target_id
+        );
+        subs.insert(
+            local_name.to_string(),
+            SubSocket {
+                socket,
+                topics: HashSet::new(),
+            },
+        );
         Ok(())
     }
 
@@ -151,11 +164,7 @@ impl PubSubManager {
     ///
     /// - `topics` 为空：不过滤任何 sub_topic（保留所有）。
     /// - 非空：仅当收到的 sub_topic 在此列表中时才返回；其他 sub_topic 会被静默丢弃。
-    pub fn set_sub_topics<S: AsRef<str>>(
-        &mut self,
-        local_name: &str,
-        topics: &[S],
-    ) -> Result<()> {
+    pub fn set_sub_topics<S: AsRef<str>>(&mut self, local_name: &str, topics: &[S]) -> Result<()> {
         let entry = self
             .subs
             .get_mut(local_name)
@@ -170,21 +179,20 @@ impl PubSubManager {
     pub fn tick(&mut self) -> Result<()> {
         let mut to_connect = Vec::new();
         for (local_name, target_id) in &self.pending_subs.clone() {
-            let addr = self
-                .registry
-                .get_address(target_id)
-                .or_else(|| {
-                    self.static_nodes
-                        .get(target_id)
-                        .map(|(h, p)| (h.clone(), *p))
-                });
+            let addr = self.registry.get_address(target_id).or_else(|| {
+                self.static_nodes
+                    .get(target_id)
+                    .map(|(h, p)| (h.clone(), *p))
+            });
             if let Some((host, port)) = addr {
                 to_connect.push((local_name.clone(), target_id.clone(), host, port));
             }
         }
         for (local_name, target_id, host, port) in to_connect {
             match Self::connect_sub(&mut self.subs, &local_name, &target_id, &host, port) {
-                Ok(_) => { self.pending_subs.remove(&local_name); }
+                Ok(_) => {
+                    self.pending_subs.remove(&local_name);
+                }
                 Err(e) => warn!("Failed to connect {} to {}: {}", local_name, target_id, e),
             }
         }
@@ -210,9 +218,9 @@ impl PubSubManager {
         }
 
         let socket = if self.shared_pub_topics.contains(topic_key) {
-            self.shared_pub
-                .as_ref()
-                .ok_or_else(|| RsCtrlError::Comms(format!("Pub key '{}' not initialized", topic_key)))?
+            self.shared_pub.as_ref().ok_or_else(|| {
+                RsCtrlError::Comms(format!("Pub key '{}' not initialized", topic_key))
+            })?
         } else {
             self.pubs
                 .get(topic_key)
@@ -230,7 +238,12 @@ impl PubSubManager {
     }
 
     /// 发布特定子话题 (Bincode 序列化)
-    pub fn publish_topic<T: serde::Serialize>(&mut self, topic_key: &str, sub_topic: &str, data: &T) -> Result<()> {
+    pub fn publish_topic<T: serde::Serialize>(
+        &mut self,
+        topic_key: &str,
+        sub_topic: &str,
+        data: &T,
+    ) -> Result<()> {
         // 1) 频率控制：如设置了 publish_hz，则按最小间隔丢弃过快的发送请求
         if self.publish_hz < 0 {
             // 全局禁止发布
@@ -249,10 +262,12 @@ impl PubSubManager {
         }
 
         let socket = if self.shared_pub_topics.contains(topic_key) {
-            self.shared_pub.as_ref()
-                .ok_or_else(|| RsCtrlError::Comms(format!("Pub key '{}' not initialized", topic_key)))?
+            self.shared_pub.as_ref().ok_or_else(|| {
+                RsCtrlError::Comms(format!("Pub key '{}' not initialized", topic_key))
+            })?
         } else {
-            self.pubs.get(topic_key)
+            self.pubs
+                .get(topic_key)
                 .ok_or_else(|| RsCtrlError::Comms(format!("Pub key '{}' not found", topic_key)))?
         };
 
@@ -263,7 +278,7 @@ impl PubSubManager {
 
         match socket.send_multipart(&[id_bytes, topic_bytes, &payload], zmq::DONTWAIT) {
             Ok(_) => Ok(()),
-            Err(e) if e == zmq::Error::EAGAIN => Ok(()), 
+            Err(e) if e == zmq::Error::EAGAIN => Ok(()),
             Err(e) => Err(RsCtrlError::Zmq(e)),
         }
     }
@@ -297,7 +312,9 @@ impl PubSubManager {
 
         match sub_entry.socket.recv_multipart(0) {
             Ok(frames) => {
-                if frames.len() < 3 { return Ok(None); }
+                if frames.len() < 3 {
+                    return Ok(None);
+                }
                 let sub_topic = String::from_utf8_lossy(&frames[1]).to_string();
 
                 // 若为该本地订阅名配置了 sub_topic 过滤，只保留白名单内的 sub_topic。
@@ -317,9 +334,13 @@ impl PubSubManager {
             }
         }
     }
-    
+
     /// 辅助：直接接收并反序列化为特定类型 (如果知道具体话题)
-    pub fn try_recv_specific<T: for<'de> serde::Deserialize<'de>>(&mut self, local_name: &str, target_sub: &str) -> Result<Option<T>> {
+    pub fn try_recv_specific<T: for<'de> serde::Deserialize<'de>>(
+        &mut self,
+        local_name: &str,
+        target_sub: &str,
+    ) -> Result<Option<T>> {
         if let Some((topic, bytes)) = self.try_recv_raw(local_name)? {
             if topic == target_sub {
                 let data = bincode::deserialize(&bytes)?;

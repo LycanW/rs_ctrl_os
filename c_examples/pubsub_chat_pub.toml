@@ -1,0 +1,14 @@
+# 发布端：绑定本机端口，topic_key = control（与 publish_raw 第一个参数一致）
+[static_config]
+my_id = "chat_pub"
+host = "127.0.0.1"
+port = 5570
+is_master = true
+publish_hz = 0
+subscribe_hz = 1000
+dynamic_load_enable = false
+
+[static_config.publishers]
+control = "self"
+
+[dynamic]

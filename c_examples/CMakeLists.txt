@@ -69,3 +69,7 @@ rcos_link_static(rcos_minimal)
 add_executable(rcos_tutorial_c tutorial_node.c)
 target_compile_features(rcos_tutorial_c PRIVATE c_std_11)
 rcos_link_static(rcos_tutorial_c)
+
+add_executable(rcos_pubsub_chat pubsub_chat.c)
+target_compile_features(rcos_pubsub_chat PRIVATE c_std_11)
+rcos_link_static(rcos_pubsub_chat)

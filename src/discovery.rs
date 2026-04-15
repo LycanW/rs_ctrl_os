@@ -28,7 +28,9 @@ pub struct ServiceRegistry {
 }
 
 impl ServiceRegistry {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn register(&self, hb: &Heartbeat) {
         if let Ok(mut map) = self.nodes.write() {
@@ -47,7 +49,10 @@ impl ServiceRegistry {
     }
 
     pub fn cleanup(&self, timeout_secs: u64) {
-        let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
         let timeout_ms = timeout_secs.saturating_mul(1000);
         if let Ok(mut map) = self.nodes.write() {
             map.retain(|_, (_, _, ts)| now_ms.saturating_sub(*ts) < timeout_ms);
@@ -90,11 +95,14 @@ pub fn start_discovery(
     let broadcast_addr: SocketAddr = format!("{}:{}", MULTICAST_ADDR, DISCOVERY_PORT)
         .parse()
         .map_err(|e| RsCtrlError::Discovery(format!("Invalid discovery address: {e}")))?;
-    
+
     thread::spawn(move || {
         let interval = Duration::from_secs(1);
         loop {
-            let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
+            let now_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64;
             let hb = Heartbeat {
                 node_id: my_id_for_sender.clone(),
                 host: my_host.clone(),
@@ -105,7 +113,7 @@ pub fn start_discovery(
             };
             if let Ok(json) = serde_json::to_string(&hb) {
                 // Discovery heartbeat itself uses JSON for simplicity as it's low freq (1Hz)
-                // If you strictly want no JSON anywhere, we can swap this to bincode too, 
+                // If you strictly want no JSON anywhere, we can swap this to bincode too,
                 // but for 1Hz discovery, JSON overhead is negligible.
                 let _ = send_socket.send_to(json.as_bytes(), broadcast_addr);
             }
@@ -143,6 +151,9 @@ pub fn start_discovery(
         }
     });
 
-    info!("📡 Discovery started (ID: {}, Master: {})", my_id, is_master);
+    info!(
+        "📡 Discovery started (ID: {}, Master: {})",
+        my_id, is_master
+    );
     Ok(registry)
 }

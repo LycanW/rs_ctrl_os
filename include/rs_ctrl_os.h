@@ -86,12 +86,13 @@ RcOsServiceRegistry *rs_ctrl_os_discovery_start(
     int is_master,
     const RcOsTimeSyncHandle *time_sync);
 
-/** Only if discovery failed or registry was never passed to pubsub_new. */
+/** Only if discovery failed, or if you never called pubsub_new with this pointer. Never after pubsub_new (success or failure). */
 void rs_ctrl_os_registry_destroy(RcOsServiceRegistry *p);
 
 /**
- * Create pub/sub manager. CONSUMES `registry` (do not destroy after success).
- * NULL on failure (registry is lost; reopen config and discovery if needed).
+ * Create pub/sub manager. CONSUMES `registry` immediately (do not destroy it yourself).
+ * NULL on failure: the registry pointer is already invalid — do not call rs_ctrl_os_registry_destroy;
+ * reopen config and discovery if you need to retry.
  */
 RcOsPubSub *rs_ctrl_os_pubsub_new(const RcOsConfig *cfg, RcOsServiceRegistry *registry);
 void rs_ctrl_os_pubsub_destroy(RcOsPubSub *p);

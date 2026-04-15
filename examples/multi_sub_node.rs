@@ -5,12 +5,7 @@ use std::time::Duration;
 use serde::Deserialize;
 
 use rs_ctrl_os::{
-    load_config_typed,
-    init_logging,
-    start_discovery,
-    PubSubManager,
-    TimeSynchronizer,
-    Result,
+    init_logging, load_config_typed, start_discovery, PubSubManager, Result, TimeSynchronizer,
 };
 
 /// 本示例不需要热重载，使用 load_config_typed 一次性加载。
@@ -70,4 +65,3 @@ fn main() -> Result<()> {
         thread::sleep(Duration::from_millis(1));
     }
 }
-
