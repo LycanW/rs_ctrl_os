@@ -12,9 +12,13 @@ pub use error::{Result, RsCtrlError};
 pub use time_sync::TimeSynchronizer;
 
 pub fn init_logging() {
+    use std::sync::Once;
     use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*};
 
-    tracing_subscriber::registry()
-        .with(fmt::layer().with_filter(LevelFilter::INFO))
-        .init();
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        tracing_subscriber::registry()
+            .with(fmt::layer().with_filter(LevelFilter::INFO))
+            .init();
+    });
 }
