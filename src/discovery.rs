@@ -115,11 +115,13 @@ pub fn start_discovery(
                 clock_time_ms: now_ms,
                 is_master,
             };
-            if let Ok(json) = serde_json::to_string(&hb) {
-                // Discovery heartbeat itself uses JSON for simplicity as it's low freq (1Hz)
-                // If you strictly want no JSON anywhere, we can swap this to bincode too,
-                // but for 1Hz discovery, JSON overhead is negligible.
-                let _ = send_socket.send_to(json.as_bytes(), broadcast_addr);
+            match serde_json::to_string(&hb) {
+                Ok(json) => {
+                    if let Err(e) = send_socket.send_to(json.as_bytes(), broadcast_addr) {
+                        warn!("Heartbeat send failed: {e}");
+                    }
+                }
+                Err(e) => warn!("Heartbeat serialization failed: {e}"),
             }
             thread::sleep(interval);
         }
