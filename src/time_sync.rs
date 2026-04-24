@@ -59,11 +59,8 @@ impl TimeSynchronizer {
             return now;
         };
 
-        if state.offset_ms >= 0 {
-            now.saturating_add(state.offset_ms as u64)
-        } else {
-            now.saturating_sub((-state.offset_ms) as u64)
-        }
+        // offset = local - master; subtract it to arrive at master time.
+        now.saturating_add_signed(-state.offset_ms)
     }
 
     // Helper for examples to check status without exposing internals too much
