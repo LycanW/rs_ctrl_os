@@ -57,9 +57,10 @@ where
     D: for<'de> Deserialize<'de>,
 {
     let (static_cfg, dyn_val) = load_config_rcos(path)?;
-    let dynamic: D =
-        toml::from_str(&toml::to_string(&dyn_val).map_err(|e| RsCtrlError::Config(e.to_string()))?)
-            .map_err(|e| RsCtrlError::Config(format!("dynamic parse failed: {}", e)))?;
+    let dynamic: D = dyn_val
+        .clone()
+        .try_into::<D>()
+        .map_err(|e| RsCtrlError::Config(format!("dynamic parse failed: {}", e)))?;
     Ok((static_cfg, dynamic))
 }
 
