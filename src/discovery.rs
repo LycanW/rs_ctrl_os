@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -22,14 +23,29 @@ pub struct Heartbeat {
     pub is_master: bool,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ServiceRegistry {
     nodes: Arc<RwLock<HashMap<String, (String, u16, u64)>>>,
+    running: Arc<AtomicBool>,
+}
+
+impl Default for ServiceRegistry {
+    fn default() -> Self {
+        Self {
+            nodes: Arc::default(),
+            running: Arc::new(AtomicBool::new(true)),
+        }
+    }
 }
 
 impl ServiceRegistry {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn shutdown(&self) {
+        self.running.store(false, Ordering::SeqCst);
+        info!("📡 Discovery shutdown signaled");
     }
 
     pub fn register(&self, hb: &Heartbeat) {
@@ -100,9 +116,10 @@ pub fn start_discovery(
         .parse()
         .map_err(|e| RsCtrlError::Discovery(format!("Invalid discovery address: {e}")))?;
 
+    let sender_running = Arc::clone(&registry.running);
     thread::spawn(move || {
         let interval = Duration::from_secs(1);
-        loop {
+        while sender_running.load(Ordering::SeqCst) {
             let now_ms = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
@@ -127,9 +144,10 @@ pub fn start_discovery(
         }
     });
 
+    let receiver_running = Arc::clone(&registry.running);
     thread::spawn(move || {
         let mut buf = [0u8; 1024];
-        loop {
+        while receiver_running.load(Ordering::SeqCst) {
             match socket.recv_from(&mut buf) {
                 Ok((len, _addr)) => {
                     if let Ok(hb_str) = std::str::from_utf8(&buf[..len]) {
