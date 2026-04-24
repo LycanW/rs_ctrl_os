@@ -53,6 +53,16 @@ pub struct PubSubManager {
 
 impl PubSubManager {
     pub fn new(static_cfg: &StaticBase, registry: ServiceRegistry) -> Result<Self> {
+        // Validate: only "self" publishers are supported.
+        for (topic_key, target) in &static_cfg.publishers {
+            if target != "self" {
+                return Err(RsCtrlError::Config(format!(
+                    "publisher '{}' has target '{}' — only \"self\" is supported",
+                    topic_key, target
+                )));
+            }
+        }
+
         let mut subs = HashMap::new();
         let mut pending_subs = HashMap::new();
 
