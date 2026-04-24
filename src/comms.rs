@@ -36,9 +36,7 @@ struct SubSocket {
 /// - 订阅频率控制：通过 `subscribe_hz` 限制 `try_recv_*` 的轮询频率。
 ///   频率配置建议从各节点的 `[dynamic]` 中传入（如 `publish_hz` / `subscribe_hz`）。
 pub struct PubSubManager {
-    pubs: HashMap<String, Socket>,
     shared_pub: Option<Socket>,
-    shared_pub_topics: HashSet<String>,
     subs: HashMap<String, SubSocket>,
     registry: ServiceRegistry,
     /// node_id -> (host, port)，discovery 失败时的 fallback
@@ -55,24 +53,17 @@ pub struct PubSubManager {
 
 impl PubSubManager {
     pub fn new(static_cfg: &StaticBase, registry: ServiceRegistry) -> Result<Self> {
-        let pubs = HashMap::new();
         let mut subs = HashMap::new();
         let mut pending_subs = HashMap::new();
 
-        let self_topics: HashSet<String> = static_cfg
-            .publishers
-            .iter()
-            .filter(|(_, t)| *t == "self")
-            .map(|(k, _)| k.clone())
-            .collect();
-        let shared_pub = if self_topics.is_empty() {
+        let shared_pub = if static_cfg.publishers.is_empty() {
             None
         } else {
             let socket = ZMQ_CONTEXT.socket(zmq::PUB)?;
             let endpoint = format!("tcp://{}:{}", static_cfg.host, static_cfg.port);
             socket.set_sndhwm(1000)?;
             socket.bind(&endpoint)?;
-            info!("📢 [PUB] bound to {} (topics: {:?})", endpoint, self_topics);
+            info!("📢 [PUB] bound to {} (topics: {:?})", endpoint, static_cfg.publishers);
             Some(socket)
         };
 
@@ -97,9 +88,7 @@ impl PubSubManager {
         }
 
         Ok(Self {
-            pubs,
             shared_pub,
-            shared_pub_topics: self_topics,
             subs,
             registry,
             static_nodes,
@@ -217,15 +206,9 @@ impl PubSubManager {
             self.last_publish.insert(topic_key.to_string(), now);
         }
 
-        let socket = if self.shared_pub_topics.contains(topic_key) {
-            self.shared_pub.as_ref().ok_or_else(|| {
-                RsCtrlError::Comms(format!("Pub key '{}' not initialized", topic_key))
-            })?
-        } else {
-            self.pubs
-                .get(topic_key)
-                .ok_or_else(|| RsCtrlError::Comms(format!("Pub key '{}' not found", topic_key)))?
-        };
+        let socket = self.shared_pub.as_ref().ok_or_else(|| {
+            RsCtrlError::Comms(format!("Pub key '{}' not initialized", topic_key))
+        })?;
 
         let id_bytes = self.my_id.as_bytes();
         let topic_bytes = sub_topic.as_bytes();
@@ -261,15 +244,9 @@ impl PubSubManager {
             self.last_publish.insert(topic_key.to_string(), now);
         }
 
-        let socket = if self.shared_pub_topics.contains(topic_key) {
-            self.shared_pub.as_ref().ok_or_else(|| {
-                RsCtrlError::Comms(format!("Pub key '{}' not initialized", topic_key))
-            })?
-        } else {
-            self.pubs
-                .get(topic_key)
-                .ok_or_else(|| RsCtrlError::Comms(format!("Pub key '{}' not found", topic_key)))?
-        };
+        let socket = self.shared_pub.as_ref().ok_or_else(|| {
+            RsCtrlError::Comms(format!("Pub key '{}' not initialized", topic_key))
+        })?;
 
         let payload = bincode::serialize(data)?;
 
