@@ -198,6 +198,12 @@ impl PubSubManager {
         Ok(())
     }
 
+    fn trim_stale_rate_entries(map: &mut HashMap<String, Instant>, now: Instant) {
+        if map.len() > 64 {
+            map.retain(|_, v| now.duration_since(*v) < Duration::from_secs(60));
+        }
+    }
+
     /// 发布原始字节（不经过 serde/bincode，直接透传）。
     /// 适用于图像、点云等已编码的二进制数据（JPEG、压缩点云等）。
     /// 频率控制与 `publish_topic` 共享。
@@ -214,6 +220,7 @@ impl PubSubManager {
                 }
             }
             self.last_publish.insert(topic_key.to_string(), now);
+            Self::trim_stale_rate_entries(&mut self.last_publish, now);
         }
 
         let socket = self.shared_pub.as_ref().ok_or_else(|| {
@@ -252,6 +259,7 @@ impl PubSubManager {
                 }
             }
             self.last_publish.insert(topic_key.to_string(), now);
+            Self::trim_stale_rate_entries(&mut self.last_publish, now);
         }
 
         let socket = self.shared_pub.as_ref().ok_or_else(|| {
@@ -290,6 +298,7 @@ impl PubSubManager {
                 }
             }
             self.last_sub_poll.insert(local_name.to_string(), now);
+            Self::trim_stale_rate_entries(&mut self.last_sub_poll, now);
         }
 
         // 如果订阅还没建立（例如仍在 pending_subs 中），返回 Ok(None) 表示当前没有可读数据
