@@ -34,7 +34,11 @@ impl ServiceRegistry {
 
     pub fn register(&self, hb: &Heartbeat) {
         if let Ok(mut map) = self.nodes.write() {
-            map.insert(hb.node_id.clone(), (hb.host.clone(), hb.port, hb.timestamp));
+            let now_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64;
+            map.insert(hb.node_id.clone(), (hb.host.clone(), hb.port, now_ms));
             debug!("📡 Discovered: {} @ {}:{}", hb.node_id, hb.host, hb.port);
         } else {
             warn!("ServiceRegistry register poisoned, skipping update");
