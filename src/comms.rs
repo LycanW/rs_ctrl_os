@@ -122,7 +122,7 @@ impl PubSubManager {
         let endpoint = format!("tcp://{}:{}", host, port);
         socket.connect(&endpoint)?;
         socket.set_subscribe(b"")?; // Subscribe all, filter by app logic
-        socket.set_rcvtimeo(100)?;
+        socket.set_rcvtimeo(0)?;
         socket.set_reconnect_ivl(100)?;
         socket.set_reconnect_ivl_max(5000)?;
         socket.set_rcvhwm(1000)?;
