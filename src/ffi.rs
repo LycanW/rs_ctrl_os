@@ -404,13 +404,20 @@ pub unsafe extern "C" fn rs_ctrl_os_pubsub_new(
         return ptr::null_mut();
     }
     clear_last_error();
-    let registry = *Box::from_raw(registry);
+    // Clone the Arc-based registry before consuming the raw pointer, so the
+    // caller's pointer stays valid when PubSubManager::new fails.
+    let clone = (*registry).clone();
     match catch_unwind(AssertUnwindSafe(|| {
         let static_cfg = (*cfg).static_cfg();
-        PubSubManager::new(static_cfg, registry)
+        PubSubManager::new(static_cfg, clone)
     })) {
-        Ok(Ok(bus)) => Box::into_raw(Box::new(bus)),
+        Ok(Ok(bus)) => {
+            // Success — free the caller's registry handle (now owned by PubSubManager).
+            drop(Box::from_raw(registry));
+            Box::into_raw(Box::new(bus))
+        }
         Ok(Err(e)) => {
+            // Failure — caller retains ownership of `registry`.
             set_last_error(e.to_string());
             ptr::null_mut()
         }
