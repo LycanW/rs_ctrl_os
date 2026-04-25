@@ -1,0 +1,20 @@
+[static_config]
+my_id = "arm"
+host = "127.0.0.1"
+port = 5571
+is_master = false
+publish_hz = 0
+subscribe_hz = 0
+dynamic_load_enable = false
+
+[static_config.publishers]
+arm_resp = "self"
+
+[static_config.subscribers]
+arm_cmd = "control"
+
+# Fallback address when discovery is unavailable.
+[static_config.static_nodes]
+control = "127.0.0.1:5570"
+
+[dynamic]
