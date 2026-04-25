@@ -454,11 +454,51 @@ pub fn new(static_cfg: &StaticBase, registry: ServiceRegistry) -> Result<Self>
 
 | 方法                  | 签名                                                                                                      | 说明                                                            |
 | ------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| `try_recv_raw`      | `try_recv_raw(&mut self, local_name: &str) -> Result<Option<(String, Vec<u8>)>>`                        | 非阻塞接收，返回 `(sub_topic, payload)`；内部自动 `tick()` 并做频率限制          |
-| `try_recv_specific` | `try_recv_specific<T: Deserialize>(&mut self, local_name: &str, target_sub: &str) -> Result<Option<T>>` | 仅当 `sub_topic == target_sub` 时用 bincode 反序列化为 `T`，否则返回 `None` |
+| `try_recv_raw`      | `try_recv_raw(&mut self, local_name: &str) -> Result<Option<(String, String, Vec<u8>)>>`                | 非阻塞接收，返回 `(sender_id, sub_topic, payload)`，告知消息来自哪个节点；内部自动 `tick()` 并做频率限制 |
+| `try_recv_specific` | `try_recv_specific<T: Deserialize>(&mut self, local_name: &str, target_sub: &str) -> Result<Option<T>>` | 仅当 `sub_topic == target_sub` 时用 bincode 反序列化为 `T`，否则返回 `None`（sender_id 不关心时使用此方法） |
 
 
 **频率控制**：当 `subscribe_hz > 0` 时，按 `local_name` 限频，未到间隔返回 `None`。
+
+#### RPC 请求-响应
+
+在纯 pub/sub 上实现了轻量 RPC 信封，支持命令-响应的同步模式。RPC 消息在 payload 帧内嵌入 10 字节二进制头：
+
+```
+Byte 0:     0x52  (magic 'R')
+Byte 1:     0x01 (请求) / 0x02 (响应)
+Bytes 2-9:  request_id 小端 u64
+```
+
+**RPC 方法绕过 `publish_hz` 频率限制**，确保命令（如急停、模式切换）不会被静默丢弃。
+
+| 方法 | 签名 | 说明 |
+| --- | --- | --- |
+| `publish_request` | `publish_request(&mut self, topic_key: &str, sub_topic: &str, request_id: u64, payload: &[u8]) -> Result<()>` | 发布 RPC 请求；自动嵌入 RPC 信封并绕过频率限制 |
+| `publish_response` | `publish_response(&mut self, topic_key: &str, sub_topic: &str, request_id: u64, payload: &[u8]) -> Result<()>` | 发布 RPC 响应；同上 |
+| `try_recv_request` | `try_recv_request(&mut self, local_name: &str) -> Result<Option<(String, u64, String, Vec<u8>)>>` | 接收 RPC 请求；返回 `(sender_id, request_id, sub_topic, payload)`；非 RPC 消息静默丢弃 |
+| `try_recv_response` | `try_recv_response(&mut self, local_name: &str) -> Result<Option<(String, u64, String, Vec<u8>)>>` | 接收 RPC 响应；同上 |
+
+**用法示例：**
+
+```rust
+// 请求方 (Node A)
+let request_id = 42u64;
+bus.publish_request("control", "rpc/move_joint", request_id, &cmd_bytes)?;
+
+if let Some((sender, rid, topic, payload)) = bus.try_recv_response("rpc_in")? {
+    // rid == request_id 来匹配对应的响应
+}
+
+// 响应方 (Node B)
+bus.set_sub_topics("incoming", &["rpc/move_joint"])?;
+if let Some((sender, rid, topic, payload)) = bus.try_recv_request("incoming")? {
+    let result = handle(&payload);
+    bus.publish_response("control", "rpc_in", rid, &result)?;
+}
+```
+
+> **注意**：非 RPC 消息经过 `try_recv_request` / `try_recv_response` 时会被静默丢弃。应使用不同的 `sub_topic` 分离普通流量和 RPC 流量。`request_id` 由调用方管理（自增计数器/随机数），库只负责传输。
 
 ---
 
