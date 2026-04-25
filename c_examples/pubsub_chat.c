@@ -138,7 +138,7 @@ static int run_sub(Session *s) {
         uint8_t *pl = NULL;
         size_t plen = 0;
         int got = 0;
-        rcos_err_t rr = rs_ctrl_os_pubsub_try_recv_raw(s->bus, local_name, &st, &pl, &plen, &got);
+        rcos_err_t rr = rs_ctrl_os_pubsub_try_recv_raw(s->bus, local_name, NULL, &st, &pl, &plen, &got);
         if (rr != RCOS_OK) {
             print_last_error("try_recv_raw");
             return 1;

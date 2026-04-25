@@ -2,7 +2,6 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use bincode;
 use serde::Deserialize;
 
 use rs_ctrl_os::{
@@ -50,14 +49,15 @@ fn main() -> Result<()> {
 
     loop {
         // try_recv_raw 内部自动 tick()，无需手动调用
-        while let Some((topic, raw)) = bus.try_recv_raw("local_sub")? {
+        // 返回值 (sender_id, sub_topic, payload) 告知消息来自哪个节点
+        while let Some((sender, topic, raw)) = bus.try_recv_raw("local_sub")? {
             // rs_ctrl_os publish_topic() uses bincode; can_bridge currently publishes a String(JSON) under sub_topic="data".
             if let Ok(s) = bincode::deserialize::<String>(&raw) {
-                println!("Sub received sub_topic={topic} string={s}");
+                println!("Sub from={sender} sub_topic={topic} string={s}");
             } else {
                 let as_utf8 = std::str::from_utf8(&raw).ok();
                 println!(
-                    "Sub received sub_topic={topic} len={} utf8={} hex={}",
+                    "Sub from={sender} sub_topic={topic} len={} utf8={} hex={}",
                     raw.len(),
                     as_utf8.unwrap_or("<non-utf8>"),
                     fmt_hex(&raw)

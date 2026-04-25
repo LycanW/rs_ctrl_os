@@ -46,16 +46,16 @@ fn main() -> Result<()> {
         // - "from_multi_pub" 订阅 multi_pub 节点
         // - "from_pub"       订阅 pub_node 节点
         for local_name in &["from_multi_pub", "from_pub"] {
-            if let Some((topic, bytes)) = bus.try_recv_raw(local_name)? {
+            if let Some((sender, topic, bytes)) = bus.try_recv_raw(local_name)? {
                 if let Ok(text) = bincode::deserialize::<String>(&bytes) {
                     println!(
-                        "[multi_sub][dec]  local='{}' sub_topic='{}' text=\"{}\"",
-                        local_name, topic, text
+                        "[multi_sub][dec]  from={} local='{}' sub_topic='{}' text=\"{}\"",
+                        sender, local_name, topic, text
                     );
                 } else {
                     println!(
-                        "[multi_sub][dec]  local='{}' sub_topic='{}' <failed to deserialize as String>",
-                        local_name, topic
+                        "[multi_sub][dec]  from={} local='{}' sub_topic='{}' <failed to deserialize as String>",
+                        sender, local_name, topic
                     );
                 }
             }

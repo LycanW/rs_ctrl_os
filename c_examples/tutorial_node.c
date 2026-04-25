@@ -236,7 +236,7 @@ int main(int argc, char **argv) {
             size_t plen = 0;
             int got = 0;
             rcos_err_t rr =
-                rs_ctrl_os_pubsub_try_recv_raw(bus, "local_sub", &st, &pl, &plen, &got);
+                rs_ctrl_os_pubsub_try_recv_raw(bus, "local_sub", NULL, &st, &pl, &plen, &got);
             if (rr != RCOS_OK) {
                 print_last_error("try_recv_raw");
                 break;

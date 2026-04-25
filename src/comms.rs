@@ -10,6 +10,35 @@ use zmq::{Context, Socket};
 
 static ZMQ_CONTEXT: Lazy<Context> = Lazy::new(|| Context::new());
 
+// --- RPC binary envelope ---
+// Wraps user payload inside a 10-byte header for request/response correlation.
+// Wire format inside payload frame: [magic: 1B][type: 1B][request_id: u64 LE]
+
+const RPC_MAGIC: u8 = 0x52; // 'R'
+const RPC_MSG_REQUEST: u8 = 0x01;
+const RPC_MSG_RESPONSE: u8 = 0x02;
+const RPC_HEADER_LEN: usize = 10;
+
+fn build_rpc_header(msg_type: u8, request_id: u64) -> [u8; RPC_HEADER_LEN] {
+    let mut hdr = [0u8; RPC_HEADER_LEN];
+    hdr[0] = RPC_MAGIC;
+    hdr[1] = msg_type;
+    hdr[2..RPC_HEADER_LEN].copy_from_slice(&request_id.to_le_bytes());
+    hdr
+}
+
+fn parse_rpc_header(data: &[u8]) -> Option<(u8, u64)> {
+    if data.len() < RPC_HEADER_LEN || data[0] != RPC_MAGIC {
+        return None;
+    }
+    let msg_type = data[1];
+    if msg_type != RPC_MSG_REQUEST && msg_type != RPC_MSG_RESPONSE {
+        return None;
+    }
+    let rid = u64::from_le_bytes(data[2..RPC_HEADER_LEN].try_into().unwrap());
+    Some((msg_type, rid))
+}
+
 /// 解析 "host:port" 或 "[::1]:port"，不进行 DNS 解析。
 fn parse_host_port(s: &str) -> Option<(String, u16)> {
     let idx = s.rfind(':')?;
@@ -204,14 +233,19 @@ impl PubSubManager {
         }
     }
 
-    /// 发布原始字节（不经过 serde/bincode，直接透传）。
-    /// 适用于图像、点云等已编码的二进制数据（JPEG、压缩点云等）。
-    /// 频率控制与 `publish_topic` 共享。
-    pub fn publish_raw(&mut self, topic_key: &str, sub_topic: &str, payload: &[u8]) -> Result<()> {
+    /// Core send: builds 3-frame multipart and sends on the PUB socket.
+    /// When `bypass_rate` is true, the publish_hz rate limiter is skipped.
+    fn send_raw_inner(
+        &mut self,
+        topic_key: &str,
+        sub_topic: &str,
+        payload: &[u8],
+        bypass_rate: bool,
+    ) -> Result<()> {
         if self.publish_hz < 0 {
             return Ok(());
         }
-        if self.publish_hz > 0 {
+        if self.publish_hz > 0 && !bypass_rate {
             let now = Instant::now();
             let min_interval = Duration::from_secs_f64(1.0 / self.publish_hz as f64);
             if let Some(last) = self.last_publish.get(topic_key) {
@@ -237,6 +271,13 @@ impl PubSubManager {
         }
     }
 
+    /// 发布原始字节（不经过 serde/bincode，直接透传）。
+    /// 适用于图像、点云等已编码的二进制数据（JPEG、压缩点云等）。
+    /// 频率控制与 `publish_topic` 共享。
+    pub fn publish_raw(&mut self, topic_key: &str, sub_topic: &str, payload: &[u8]) -> Result<()> {
+        self.send_raw_inner(topic_key, sub_topic, payload, false)
+    }
+
     /// 发布特定子话题 (Bincode 序列化)
     pub fn publish_topic<T: serde::Serialize>(
         &mut self,
@@ -244,49 +285,16 @@ impl PubSubManager {
         sub_topic: &str,
         data: &T,
     ) -> Result<()> {
-        // 1) 频率控制：如设置了 publish_hz，则按最小间隔丢弃过快的发送请求
-        if self.publish_hz < 0 {
-            // 全局禁止发布
-            return Ok(());
-        }
-        if self.publish_hz > 0 {
-            let now = Instant::now();
-            let min_interval = Duration::from_secs_f64(1.0 / self.publish_hz as f64);
-            if let Some(last) = self.last_publish.get(topic_key) {
-                if now.duration_since(*last) < min_interval {
-                    // 超过频率上限，直接丢弃本次发送请求
-                    return Ok(());
-                }
-            }
-            self.last_publish.insert(topic_key.to_string(), now);
-            Self::trim_stale_rate_entries(&mut self.last_publish, now);
-        }
-
-        let socket = self.shared_pub.as_ref().ok_or_else(|| {
-            RsCtrlError::Comms(format!("Pub key '{}' not initialized", topic_key))
-        })?;
-
         let payload = bincode::serialize(data)?;
-
-        let id_bytes = self.my_id.as_bytes();
-        let topic_bytes = sub_topic.as_bytes();
-
-        match socket.send_multipart(&[id_bytes, topic_bytes, &payload], zmq::DONTWAIT) {
-            Ok(_) => Ok(()),
-            Err(e) if e == zmq::Error::EAGAIN => Ok(()),
-            Err(e) => Err(RsCtrlError::Zmq(e)),
-        }
+        self.send_raw_inner(topic_key, sub_topic, &payload, false)
     }
 
-    /// 接收原始字节 (由用户反序列化)
-    /// 内部自动调用 tick()，无需在主循环手动调用。
-    pub fn try_recv_raw(&mut self, local_name: &str) -> Result<Option<(String, Vec<u8>)>> {
-        // 0) 自动驱动 pending 订阅连接（目标发现后自动建立）
+    /// Core receive: performs tick + rate limiting + ZMQ recv + topic filter.
+    /// Returns all 3 frames: (sender_id, sub_topic, payload).
+    fn try_recv_inner(&mut self, local_name: &str) -> Result<Option<(String, String, Vec<u8>)>> {
         let _ = self.tick();
 
-        // 1) 频率控制：如设置了 subscribe_hz，则按最小间隔限制轮询频率
         if self.subscribe_hz < 0 {
-            // 全局禁止订阅/消费
             return Ok(None);
         }
         if self.subscribe_hz > 0 {
@@ -301,7 +309,6 @@ impl PubSubManager {
             Self::trim_stale_rate_entries(&mut self.last_sub_poll, now);
         }
 
-        // 如果订阅还没建立（例如仍在 pending_subs 中），返回 Ok(None) 表示当前没有可读数据
         let Some(sub_entry) = self.subs.get(local_name) else {
             return Ok(None);
         };
@@ -311,9 +318,9 @@ impl PubSubManager {
                 if frames.len() < 3 {
                     return Ok(None);
                 }
+                let sender_id = String::from_utf8_lossy(&frames[0]).to_string();
                 let sub_topic = String::from_utf8_lossy(&frames[1]).to_string();
 
-                // 若为该本地订阅名配置了 sub_topic 过滤，只保留白名单内的 sub_topic。
                 if let Some(entry) = self.subs.get(local_name) {
                     if !entry.topics.is_empty() && !entry.topics.contains(&sub_topic) {
                         return Ok(None);
@@ -321,7 +328,7 @@ impl PubSubManager {
                 }
 
                 let payload = frames[2].to_vec();
-                Ok(Some((sub_topic, payload)))
+                Ok(Some((sender_id, sub_topic, payload)))
             }
             Err(e) if e == zmq::Error::EAGAIN => Ok(None),
             Err(e) => {
@@ -331,16 +338,100 @@ impl PubSubManager {
         }
     }
 
+    /// 接收原始字节 (由用户反序列化)
+    /// 返回 (sender_id, sub_topic, payload)，其中 sender_id 是发布者的 node_id。
+    /// 内部自动调用 tick()，无需在主循环手动调用。
+    pub fn try_recv_raw(
+        &mut self,
+        local_name: &str,
+    ) -> Result<Option<(String, String, Vec<u8>)>> {
+        self.try_recv_inner(local_name)
+    }
+
     /// 辅助：直接接收并反序列化为特定类型 (如果知道具体话题)
     pub fn try_recv_specific<T: for<'de> serde::Deserialize<'de>>(
         &mut self,
         local_name: &str,
         target_sub: &str,
     ) -> Result<Option<T>> {
-        if let Some((topic, bytes)) = self.try_recv_raw(local_name)? {
+        if let Some((_sender, topic, bytes)) = self.try_recv_raw(local_name)? {
             if topic == target_sub {
                 let data = bincode::deserialize(&bytes)?;
                 return Ok(Some(data));
+            }
+        }
+        Ok(None)
+    }
+
+    // --- RPC methods: request-response on top of PUB/SUB ---
+    //
+    // RPC messages use a 10-byte binary envelope prepended to the payload:
+    //   [magic: 'R'][type: 0x01=req/0x02=res][request_id: u64 LE]
+    //
+    // These methods **bypass** the publish_hz rate limiter so that
+    // imperative commands (e.g. emergency stop) are never silently dropped.
+
+    /// 发布 RPC 请求。自动绕过发布频率限制。
+    pub fn publish_request(
+        &mut self,
+        topic_key: &str,
+        sub_topic: &str,
+        request_id: u64,
+        payload: &[u8],
+    ) -> Result<()> {
+        let header = build_rpc_header(RPC_MSG_REQUEST, request_id);
+        let mut buf = Vec::with_capacity(RPC_HEADER_LEN + payload.len());
+        buf.extend_from_slice(&header);
+        buf.extend_from_slice(payload);
+        self.send_raw_inner(topic_key, sub_topic, &buf, true)
+    }
+
+    /// 发布 RPC 响应。自动绕过发布频率限制。
+    pub fn publish_response(
+        &mut self,
+        topic_key: &str,
+        sub_topic: &str,
+        request_id: u64,
+        payload: &[u8],
+    ) -> Result<()> {
+        let header = build_rpc_header(RPC_MSG_RESPONSE, request_id);
+        let mut buf = Vec::with_capacity(RPC_HEADER_LEN + payload.len());
+        buf.extend_from_slice(&header);
+        buf.extend_from_slice(payload);
+        self.send_raw_inner(topic_key, sub_topic, &buf, true)
+    }
+
+    /// 接收 RPC 请求。
+    /// 返回 `(sender_id, request_id, sub_topic, payload)`。
+    /// 非 RPC 请求的消息会被静默丢弃，请通过 sub_topic 分离普通流量和 RPC 流量。
+    pub fn try_recv_request(
+        &mut self,
+        local_name: &str,
+    ) -> Result<Option<(String, u64, String, Vec<u8>)>> {
+        if let Some((sender, sub_topic, raw)) = self.try_recv_inner(local_name)? {
+            if let Some((msg_type, rid)) = parse_rpc_header(&raw) {
+                if msg_type == RPC_MSG_REQUEST {
+                    let payload = raw[RPC_HEADER_LEN..].to_vec();
+                    return Ok(Some((sender, rid, sub_topic, payload)));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    /// 接收 RPC 响应。
+    /// 返回 `(sender_id, request_id, sub_topic, payload)`。
+    /// 非 RPC 响应的消息会被静默丢弃。
+    pub fn try_recv_response(
+        &mut self,
+        local_name: &str,
+    ) -> Result<Option<(String, u64, String, Vec<u8>)>> {
+        if let Some((sender, sub_topic, raw)) = self.try_recv_inner(local_name)? {
+            if let Some((msg_type, rid)) = parse_rpc_header(&raw) {
+                if msg_type == RPC_MSG_RESPONSE {
+                    let payload = raw[RPC_HEADER_LEN..].to_vec();
+                    return Ok(Some((sender, rid, sub_topic, payload)));
+                }
             }
         }
         Ok(None)

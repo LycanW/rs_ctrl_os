@@ -478,12 +478,14 @@ pub unsafe extern "C" fn rs_ctrl_os_pubsub_publish_raw(
 }
 
 /// Non-blocking receive. On success with a message (`*got_message_out == 1`), allocates
-/// `*sub_topic_out` (NUL-terminated, free with [`rs_ctrl_os_str_free`]) and `*payload_out`
-/// (free with [`rs_ctrl_os_payload_free`]); `*payload_len_out` is set.
+/// `*sender_id_out` and `*sub_topic_out` (NUL-terminated, free with [`rs_ctrl_os_str_free`])
+/// and `*payload_out` (free with [`rs_ctrl_os_payload_free`]); `*payload_len_out` is set.
+/// sender_id_out may be NULL if the caller does not need the sender identity.
 #[no_mangle]
 pub unsafe extern "C" fn rs_ctrl_os_pubsub_try_recv_raw(
     bus: *mut PubSubManager,
     local_name: *const c_char,
+    sender_id_out: *mut *mut c_char,
     sub_topic_out: *mut *mut c_char,
     payload_out: *mut *mut u8,
     payload_len_out: *mut size_t,
@@ -499,6 +501,9 @@ pub unsafe extern "C" fn rs_ctrl_os_pubsub_try_recv_raw(
         return RCOS_ERR_INVALID;
     }
     *got_message_out = 0;
+    if !sender_id_out.is_null() {
+        *sender_id_out = ptr::null_mut();
+    }
     *sub_topic_out = ptr::null_mut();
     *payload_out = ptr::null_mut();
     *payload_len_out = 0;
@@ -519,10 +524,22 @@ pub unsafe extern "C" fn rs_ctrl_os_pubsub_try_recv_raw(
             return RCOS_ERR_INTERNAL;
         }
     };
-    let Some((sub_topic, payload)) = opt else {
+    let Some((sender_id, sub_topic, payload)) = opt else {
         return RCOS_OK;
     };
     *got_message_out = 1;
+
+    if !sender_id_out.is_null() {
+        let sender_c = match CString::new(sender_id) {
+            Ok(c) => c.into_raw(),
+            Err(_) => {
+                set_last_error("sender_id contains NUL");
+                return RCOS_ERR_SERIALIZATION;
+            }
+        };
+        *sender_id_out = sender_c;
+    }
+
     let topic_c = match CString::new(sub_topic) {
         Ok(c) => c.into_raw(),
         Err(_) => {
@@ -555,6 +572,167 @@ pub unsafe extern "C" fn rs_ctrl_os_pubsub_try_recv_raw(
     *payload_len_out = payload.len();
     RCOS_OK
 }
+
+// --- RPC FFI functions ---
+
+/// Helper: extract `topic_key` and `sub_topic` C strings for RPC publish calls.
+/// Returns `(topic_key_str, sub_topic_str, payload_slice)` or an error code.
+macro_rules! rpc_publish_params {
+    ($bus:expr, $topic_key:expr, $sub_topic:expr, $payload:expr, $payload_len:expr) => {{
+        if $bus.is_null() || $topic_key.is_null() || $sub_topic.is_null() {
+            return RCOS_ERR_INVALID;
+        }
+        if $payload.is_null() && $payload_len > 0 {
+            return RCOS_ERR_INVALID;
+        }
+        let topic_key = match CStr::from_ptr($topic_key).to_str() {
+            Ok(s) => s,
+            Err(_) => return RCOS_ERR_UTF8,
+        };
+        let sub_topic = match CStr::from_ptr($sub_topic).to_str() {
+            Ok(s) => s,
+            Err(_) => return RCOS_ERR_UTF8,
+        };
+        let pl = std::slice::from_raw_parts($payload, $payload_len);
+        (topic_key, sub_topic, pl)
+    }};
+}
+
+/// Publish an RPC request. Bypasses the publish_hz rate limiter.
+#[no_mangle]
+pub unsafe extern "C" fn rs_ctrl_os_pubsub_publish_request(
+    bus: *mut PubSubManager,
+    topic_key: *const c_char,
+    sub_topic: *const c_char,
+    request_id: u64,
+    payload: *const u8,
+    payload_len: size_t,
+) -> c_int {
+    let (topic_key, sub_topic, pl) =
+        rpc_publish_params!(bus, topic_key, sub_topic, payload, payload_len);
+    ffi_guard_void(|| (*bus).publish_request(topic_key, sub_topic, request_id, pl))
+}
+
+/// Publish an RPC response. Bypasses the publish_hz rate limiter.
+#[no_mangle]
+pub unsafe extern "C" fn rs_ctrl_os_pubsub_publish_response(
+    bus: *mut PubSubManager,
+    topic_key: *const c_char,
+    sub_topic: *const c_char,
+    request_id: u64,
+    payload: *const u8,
+    payload_len: size_t,
+) -> c_int {
+    let (topic_key, sub_topic, pl) =
+        rpc_publish_params!(bus, topic_key, sub_topic, payload, payload_len);
+    ffi_guard_void(|| (*bus).publish_response(topic_key, sub_topic, request_id, pl))
+}
+
+macro_rules! rpc_recv_fn {
+    ($name:ident, $rust_method:ident) => {
+        #[no_mangle]
+        pub unsafe extern "C" fn $name(
+            bus: *mut PubSubManager,
+            local_name: *const c_char,
+            sender_id_out: *mut *mut c_char,
+            sub_topic_out: *mut *mut c_char,
+            request_id_out: *mut u64,
+            payload_out: *mut *mut u8,
+            payload_len_out: *mut size_t,
+            got_message_out: *mut c_int,
+        ) -> c_int {
+            if bus.is_null()
+                || local_name.is_null()
+                || sender_id_out.is_null()
+                || sub_topic_out.is_null()
+                || request_id_out.is_null()
+                || payload_out.is_null()
+                || payload_len_out.is_null()
+                || got_message_out.is_null()
+            {
+                return RCOS_ERR_INVALID;
+            }
+            *got_message_out = 0;
+            *sender_id_out = ptr::null_mut();
+            *sub_topic_out = ptr::null_mut();
+            *request_id_out = 0;
+            *payload_out = ptr::null_mut();
+            *payload_len_out = 0;
+
+            let local_name = match CStr::from_ptr(local_name).to_str() {
+                Ok(s) => s,
+                Err(_) => return RCOS_ERR_UTF8,
+            };
+            clear_last_error();
+            let res = catch_unwind(AssertUnwindSafe(|| (*bus).$rust_method(local_name)));
+            let opt = match res {
+                Ok(Ok(o)) => o,
+                Ok(Err(e)) => {
+                    set_last_error(e.to_string());
+                    return map_err(e);
+                }
+                Err(_) => {
+                    set_last_error(concat!("panic in ", stringify!($name)));
+                    return RCOS_ERR_INTERNAL;
+                }
+            };
+            let Some((sender_id, rid, sub_topic, payload)) = opt else {
+                return RCOS_OK;
+            };
+            *got_message_out = 1;
+            *request_id_out = rid;
+
+            let sender_c = match CString::new(sender_id) {
+                Ok(c) => c.into_raw(),
+                Err(_) => {
+                    set_last_error("sender_id contains NUL");
+                    return RCOS_ERR_SERIALIZATION;
+                }
+            };
+            *sender_id_out = sender_c;
+
+            let topic_c = match CString::new(sub_topic) {
+                Ok(c) => c.into_raw(),
+                Err(_) => {
+                    set_last_error("sub_topic contains NUL");
+                    return RCOS_ERR_SERIALIZATION;
+                }
+            };
+            *sub_topic_out = topic_c;
+
+            let pptr = if payload.is_empty() {
+                ptr::null_mut()
+            } else {
+                let layout = match std::alloc::Layout::from_size_align(payload.len(), 1) {
+                    Ok(l) => l,
+                    Err(_) => {
+                        set_last_error("invalid payload layout");
+                        return RCOS_ERR_INTERNAL;
+                    }
+                };
+                let raw = std::alloc::alloc(layout);
+                if raw.is_null() {
+                    set_last_error("alloc payload failed");
+                    return RCOS_ERR_INTERNAL;
+                }
+                ptr::copy_nonoverlapping(payload.as_ptr(), raw, payload.len());
+                raw
+            };
+            *payload_out = pptr;
+            *payload_len_out = payload.len();
+            RCOS_OK
+        }
+    };
+}
+
+rpc_recv_fn!(
+    rs_ctrl_os_pubsub_try_recv_request,
+    try_recv_request
+);
+rpc_recv_fn!(
+    rs_ctrl_os_pubsub_try_recv_response,
+    try_recv_response
+);
 
 /// Frees buffer returned in `payload_out` from [`rs_ctrl_os_pubsub_try_recv_raw`].
 #[no_mangle]

@@ -101,7 +101,7 @@ int main(int argc, char **argv) {
         std::size_t plen = 0;
         int got = 0;
         rcos_err_t r =
-            rs_ctrl_os_pubsub_try_recv_raw(bus, "local_sub", &st, &pl, &plen, &got);
+            rs_ctrl_os_pubsub_try_recv_raw(bus, "local_sub", NULL, &st, &pl, &plen, &got);
         if (r != RCOS_OK) {
             print_last_error("try_recv_raw");
             break;

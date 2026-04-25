@@ -109,12 +109,15 @@ rcos_err_t rs_ctrl_os_pubsub_publish_raw(
     size_t payload_len);
 
 /**
- * Non-blocking receive. If *got_message_out == 1, *sub_topic_out and *payload_out are allocated;
- * free with rs_ctrl_os_str_free and rs_ctrl_os_payload_free(..., *payload_len_out).
+ * Non-blocking receive. If *got_message_out == 1, *sender_id_out, *sub_topic_out, and
+ * *payload_out are allocated; free *sender_id_out and *sub_topic_out with
+ * rs_ctrl_os_str_free, and *payload_out with rs_ctrl_os_payload_free(..., *payload_len_out).
+ * sender_id_out may be NULL if the caller does not need the sender identity.
  */
 rcos_err_t rs_ctrl_os_pubsub_try_recv_raw(
     RcOsPubSub *bus,
     const char *local_name,
+    char **sender_id_out,
     char **sub_topic_out,
     uint8_t **payload_out,
     size_t *payload_len_out,
@@ -128,6 +131,60 @@ rcos_err_t rs_ctrl_os_pubsub_set_sub_topics(
     const char *local_name,
     const char *const *topics,
     size_t topic_count);
+
+/**
+ * Publish an RPC request. Bypasses the publish_hz rate limiter.
+ * The library wraps the payload in a lightweight binary envelope (request_id + type tag).
+ */
+rcos_err_t rs_ctrl_os_pubsub_publish_request(
+    RcOsPubSub *bus,
+    const char *topic_key,
+    const char *sub_topic,
+    uint64_t request_id,
+    const uint8_t *payload,
+    size_t payload_len);
+
+/**
+ * Publish an RPC response. Bypasses the publish_hz rate limiter.
+ */
+rcos_err_t rs_ctrl_os_pubsub_publish_response(
+    RcOsPubSub *bus,
+    const char *topic_key,
+    const char *sub_topic,
+    uint64_t request_id,
+    const uint8_t *payload,
+    size_t payload_len);
+
+/**
+ * Non-blocking receive for RPC requests.
+ * On success with a message (*got_message_out == 1):
+ *   - *sender_id_out, *sub_topic_out allocated (free with rs_ctrl_os_str_free)
+ *   - *request_id_out set
+ *   - *payload_out allocated (free with rs_ctrl_os_payload_free(..., *payload_len_out))
+ * Non-RPC messages arriving on this subscription are silently dropped.
+ */
+rcos_err_t rs_ctrl_os_pubsub_try_recv_request(
+    RcOsPubSub *bus,
+    const char *local_name,
+    char **sender_id_out,
+    char **sub_topic_out,
+    uint64_t *request_id_out,
+    uint8_t **payload_out,
+    size_t *payload_len_out,
+    int *got_message_out);
+
+/**
+ * Same as rs_ctrl_os_pubsub_try_recv_request but for RPC responses.
+ */
+rcos_err_t rs_ctrl_os_pubsub_try_recv_response(
+    RcOsPubSub *bus,
+    const char *local_name,
+    char **sender_id_out,
+    char **sub_topic_out,
+    uint64_t *request_id_out,
+    uint8_t **payload_out,
+    size_t *payload_len_out,
+    int *got_message_out);
 
 #ifdef __cplusplus
 }
